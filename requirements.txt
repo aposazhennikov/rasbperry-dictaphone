@@ -1,5 +1,0 @@
-sounddevice==0.4.6
-soundfile==0.12.1
-python-vlc==3.0.20123
-evdev==1.6.1
-python-dateutil==2.8.2 
