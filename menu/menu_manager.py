@@ -2,11 +2,12 @@
 from .menu_item import MenuItem, SubMenu
 from .display_manager import DisplayManager
 from .tts_manager import TTSManager
+from .settings_manager import SettingsManager
 
 class MenuManager:
     """Класс для управления иерархическим меню"""
     
-    def __init__(self, tts_enabled=True, cache_dir="/home/aleks/cache_tts", debug=False, use_wav=True):
+    def __init__(self, tts_enabled=True, cache_dir="/home/aleks/cache_tts", debug=False, use_wav=True, settings_manager=None):
         """
         Инициализация менеджера меню
         
@@ -15,19 +16,38 @@ class MenuManager:
             cache_dir (str): Директория для кэширования звуковых файлов
             debug (bool): Режим отладки
             use_wav (bool): Использовать WAV вместо MP3 для более быстрого воспроизведения
+            settings_manager (SettingsManager): Менеджер настроек (если None, будет создан новый)
         """
         self.root_menu = None
         self.current_menu = None
         self.tts_enabled = tts_enabled
         self.debug = debug
         self.use_wav = use_wav
+        self.cache_dir = cache_dir
+        
+        # Инициализация менеджера настроек
+        if settings_manager:
+            self.settings_manager = settings_manager
+        else:
+            self.settings_manager = SettingsManager(settings_dir=cache_dir)
         
         # Инициализация менеджеров
         self.display_manager = DisplayManager(self)
         
-        # Инициализация менеджера TTS
+        # Инициализация менеджера TTS с голосом из настроек
         if self.tts_enabled:
-            self.tts_manager = TTSManager(cache_dir=cache_dir, debug=debug, use_wav=use_wav)
+            voice = self.settings_manager.get_voice()
+            self.tts_manager = TTSManager(
+                cache_dir=cache_dir, 
+                debug=debug, 
+                use_wav=use_wav,
+                voice=voice,
+                settings_manager=self.settings_manager
+            )
+            if self.debug:
+                print(f"TTS менеджер инициализирован с голосом {voice}")
+                print(f"TTS движок: {self.settings_manager.get_tts_engine()}")
+                
     
     def set_root_menu(self, menu):
         """
@@ -45,7 +65,11 @@ class MenuManager:
         
         # Озвучиваем название текущего меню
         if self.tts_enabled and self.current_menu:
-            self.tts_manager.play_speech(f"Меню {self.current_menu.name}")
+            # Получаем текущий голос из настроек
+            voice = self.settings_manager.get_voice()
+            
+            # Название меню всегда озвучиваем текущим голосом
+            self.tts_manager.play_speech(f"Меню {self.current_menu.name}", voice=voice)
     
     def move_up(self):
         """Перемещение вверх по текущему меню"""
@@ -57,7 +81,21 @@ class MenuManager:
             if self.tts_enabled:
                 current_item = self.current_menu.get_current_item()
                 if current_item:
-                    self.tts_manager.play_speech(current_item.get_speech_text())
+                    # Особая обработка для меню выбора голоса
+                    if self.current_menu.name == "Выбор голоса":
+                        # Находим голос, соответствующий текущему пункту меню
+                        voice_id = self._get_voice_id_for_menu_item(current_item.name)
+                        if voice_id:
+                            # Озвучиваем этот пункт с соответствующим голосом
+                            self.tts_manager.play_speech(current_item.get_speech_text(), voice=voice_id)
+                        else:
+                            # Если не нашли соответствующий голос, используем текущий
+                            voice = self.settings_manager.get_voice()
+                            self.tts_manager.play_speech(current_item.get_speech_text(), voice=voice)
+                    else:
+                        # Для всех остальных меню используем текущий голос
+                        voice = self.settings_manager.get_voice()
+                        self.tts_manager.play_speech(current_item.get_speech_text(), voice=voice)
     
     def move_down(self):
         """Перемещение вниз по текущему меню"""
@@ -69,7 +107,41 @@ class MenuManager:
             if self.tts_enabled:
                 current_item = self.current_menu.get_current_item()
                 if current_item:
-                    self.tts_manager.play_speech(current_item.get_speech_text())
+                    # Особая обработка для меню выбора голоса
+                    if self.current_menu.name == "Выбор голоса":
+                        # Находим голос, соответствующий текущему пункту меню
+                        voice_id = self._get_voice_id_for_menu_item(current_item.name)
+                        if voice_id:
+                            # Озвучиваем этот пункт с соответствующим голосом
+                            self.tts_manager.play_speech(current_item.get_speech_text(), voice=voice_id)
+                        else:
+                            # Если не нашли соответствующий голос, используем текущий
+                            voice = self.settings_manager.get_voice()
+                            self.tts_manager.play_speech(current_item.get_speech_text(), voice=voice)
+                    else:
+                        # Для всех остальных меню используем текущий голос
+                        voice = self.settings_manager.get_voice()
+                        self.tts_manager.play_speech(current_item.get_speech_text(), voice=voice)
+    
+    def _get_voice_id_for_menu_item(self, menu_item_name):
+        """
+        Получает идентификатор голоса для заданного названия пункта меню
+        
+        Args:
+            menu_item_name (str): Название пункта меню
+            
+        Returns:
+            str: Идентификатор голоса или None, если соответствие не найдено
+        """
+        # Получаем словарь голосов
+        voices_dict = self.settings_manager.get_available_voices()
+        
+        # Ищем соответствие между названием пункта меню и голосом
+        for voice_id, voice_desc in voices_dict.items():
+            if voice_desc == menu_item_name:
+                return voice_id
+                
+        return None
     
     def select_current_item(self):
         """Выбирает текущий пункт меню"""
@@ -94,7 +166,9 @@ class MenuManager:
             self.display_manager.display_message(str(result))
             
             if self.tts_enabled:
-                self.tts_manager.play_speech(str(result))
+                # Получаем текущий голос из настроек
+                voice = self.settings_manager.get_voice()
+                self.tts_manager.play_speech(str(result), voice=voice)
                 
             self.display_current_menu()
     
@@ -106,7 +180,9 @@ class MenuManager:
             
             # Озвучиваем возврат
             if self.tts_enabled:
-                self.tts_manager.play_speech(f"Возврат в {self.current_menu.name}")
+                # Получаем текущий голос из настроек
+                voice = self.settings_manager.get_voice()
+                self.tts_manager.play_speech(f"Возврат в {self.current_menu.name}", voice=voice)
                 
         elif self.current_menu != self.root_menu:
             # Если нет родительского меню, но текущее меню не корневое,
@@ -116,12 +192,23 @@ class MenuManager:
             
             # Озвучиваем возврат в главное меню
             if self.tts_enabled:
-                self.tts_manager.play_speech("Возврат в главное меню")
+                # Получаем текущий голос из настроек
+                voice = self.settings_manager.get_voice()
+                self.tts_manager.play_speech("Возврат в главное меню", voice=voice)
     
-    def pre_generate_all_speech(self):
-        """Предварительно генерирует все звуки для меню"""
+    def pre_generate_all_speech(self, voices=None):
+        """
+        Предварительно генерирует все звуки для меню
+        
+        Args:
+            voices (list, optional): Список голосов для предварительной генерации
+        """
         if not self.tts_enabled or not self.root_menu:
             return
+        
+        # Если голоса не указаны, используем все доступные голоса
+        if voices is None:
+            voices = list(self.settings_manager.get_available_voices().keys())
         
         # Собираем все тексты для озвучки
         speech_texts = set()
@@ -142,9 +229,57 @@ class MenuManager:
         
         # Добавляем системные сообщения
         speech_texts.add("Возврат в главное меню")
+        speech_texts.add("Голос успешно изменен")
         
-        # Предварительно генерируем все звуки
-        self.tts_manager.pre_generate_menu_items(speech_texts)
+        # Предварительно генерируем все звуки для всех голосов
+        self.tts_manager.pre_generate_menu_items(speech_texts, voices=voices)
+    
+    def change_voice(self, voice_id):
+        """
+        Изменяет голос озвучки
+        
+        Args:
+            voice_id (str): Идентификатор голоса
+            
+        Returns:
+            str: Сообщение о результате операции
+        """
+        # Проверяем, доступен ли TTS
+        if not self.tts_enabled:
+            return "Озвучка отключена"
+            
+        # Отладочная информация
+        if self.debug:
+            print(f"\nИзменение голоса на: {voice_id}")
+            print(f"Предыдущий голос: {self.settings_manager.get_voice()}")
+            
+        # Проверяем, не выбран ли уже этот голос
+        if self.settings_manager.get_voice() == voice_id:
+            if self.debug:
+                print(f"Голос {voice_id} уже выбран")
+            message = "Этот голос уже выбран"
+            self.tts_manager.play_speech(message, voice=voice_id)
+            return message
+            
+        # Изменяем голос в настройках
+        if self.settings_manager.set_voice(voice_id):
+            # Изменяем голос в TTS менеджере
+            self.tts_manager.set_voice(voice_id)
+            
+            # Пробуем тестовую озвучку с новым голосом
+            message = "Голос успешно изменен"
+            
+            # Явно передаем идентификатор голоса для корректной озвучки
+            self.tts_manager.play_speech(message, voice=voice_id)
+            
+            # Отладочная информация
+            if self.debug:
+                print(f"Текущий голос в настройках: {self.settings_manager.get_voice()}")
+                print(f"Текущий голос в TTS менеджере: {self.tts_manager.voice}")
+            
+            return message
+        else:
+            return "Ошибка при изменении голоса"
         
     def create_menu_structure(self):
         """Создает структуру меню согласно заданной схеме"""
@@ -244,37 +379,79 @@ class MenuManager:
             station_menu.add_item(MenuItem("Переключить на предыдущую композицию", lambda s=station: f"Предыдущая композиция на {s}"))
             station_menu.add_item(MenuItem("Переключить на следующую композицию", lambda s=station: f"Следующая композиция на {s}"))
         
+        # Добавляем подменю для настроек
+        settings_menu = SubMenu("Настройки")
+        main_menu.add_item(settings_menu)
+        
+        # - Подменю выбора голоса
+        voice_menu = SubMenu("Выбор голоса")
+        settings_menu.add_item(voice_menu)
+        
+        # -- Добавляем доступные голоса
+        available_voices = self.settings_manager.get_available_voices()
+        if self.debug:
+            print("Создание пунктов меню выбора голоса:")
+            
+        for voice_id, voice_desc in available_voices.items():
+            if self.debug:
+                print(f"  Добавление пункта: {voice_desc} -> {voice_id}")
+                
+            voice_menu.add_item(MenuItem(
+                voice_desc, 
+                lambda voice=voice_id: self.change_voice(voice)
+            ))
+        
         # Добавляем подменю для подтверждения удаления
         confirm_delete_menu = SubMenu("Подтверждение удаления")
         main_menu.add_item(confirm_delete_menu)
         
-        # Добавляем пункты подтверждения
-        confirm_delete_menu.add_item(MenuItem("Да", lambda: "Подтверждено удаление"))
-        confirm_delete_menu.add_item(MenuItem("Нет", lambda: "Отменено удаление"))
+        # -- Варианты подтверждения
+        confirm_delete_menu.add_item(MenuItem("Да", lambda: "Удаление подтверждено"))
+        confirm_delete_menu.add_item(MenuItem("Нет", lambda: "Удаление отменено"))
         
         # Устанавливаем главное меню как корневое
         self.set_root_menu(main_menu)
         
-        # Предварительно генерируем все звуки для меню
+        # Предварительно генерируем озвучку если включен TTS
         if self.tts_enabled:
-            self.pre_generate_all_speech()
-        
-        return main_menu
-
+            self.pre_generate_all_speech([self.tts_manager.voice])  # Генерируем только для текущего голоса
+    
     def get_debug_info(self):
         """
-        Возвращает отладочную информацию
+        Возвращает отладочную информацию для текущего состояния меню
         
         Returns:
-            dict: Информация о состоянии меню и озвучки
+            dict: Словарь с отладочной информацией
         """
-        info = {
+        debug_info = {
             "current_menu": self.current_menu.name if self.current_menu else "None",
-            "tts_enabled": self.tts_enabled,
-            "tts_stats": None
+            "menu_items": [item.name for item in self.current_menu.items] if self.current_menu else [],
+            "current_index": getattr(self.current_menu, 'current_index', 0)
         }
         
-        if self.tts_enabled:
-            info["tts_stats"] = self.tts_manager.get_debug_info()
+        # Добавляем информацию от TTS менеджера, если он доступен
+        if hasattr(self, 'tts_manager') and self.tts_manager:
+            debug_info["tts"] = self.tts_manager.get_debug_info()
             
-        return info
+            # Если используется Google Cloud TTS, добавляем специфичную информацию
+            if hasattr(self.tts_manager, 'tts_engine') and self.tts_manager.tts_engine == "google_cloud":
+                if hasattr(self.tts_manager, 'google_tts_manager') and self.tts_manager.google_tts_manager:
+                    try:
+                        google_tts_metrics = self.tts_manager.google_tts_manager.get_usage_info()
+                        
+                        # Форматируем метрики для удобства чтения
+                        debug_info["google_cloud_tts"] = {
+                            "total_requests": google_tts_metrics["total_requests"],
+                            "today_requests": google_tts_metrics["today_requests"],
+                            "total_chars": f"{google_tts_metrics['total_chars']:,}",
+                            "monthly_chars_used": f"{google_tts_metrics['monthly_chars_used']:,}",
+                            "remaining_free_chars": f"{google_tts_metrics['remaining_free_chars']:,}",
+                            "voice_type": google_tts_metrics["voice_type"],
+                            "price_per_million": f"${google_tts_metrics['price_per_million']:.2f}",
+                            "estimated_cost": f"${google_tts_metrics['estimated_cost']:.2f}",
+                            "last_update": google_tts_metrics["last_update"]
+                        }
+                    except Exception as e:
+                        debug_info["google_cloud_tts_error"] = str(e)
+        
+        return debug_info

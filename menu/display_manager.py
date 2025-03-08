@@ -67,24 +67,35 @@ class DisplayManager:
             
     def display_debug_info(self):
         """Отображает отладочную информацию"""
-        debug_info = self.menu_manager.get_debug_info()
-        
-        print("\n\n=== ОТЛАДОЧНАЯ ИНФОРМАЦИЯ ===")
-        print(f"Текущее меню: {debug_info['current_menu']}")
-        print(f"Озвучка включена: {debug_info['tts_enabled']}")
-        
-        # Если есть статистика TTS
-        if debug_info['tts_stats']:
-            tts_stats = debug_info['tts_stats']
-            print("\n--- Статистика TTS ---")
-            print(f"Всего запросов: {tts_stats['total_requests']}")
-            print(f"Запросов сегодня: {tts_stats['today_requests']}")
-            print(f"Примерно осталось бесплатных запросов: {tts_stats['remaining_free_requests']}")
-            print(f"Использований кэша: {tts_stats['cached_used']}")
+        try:
+            debug_info = self.menu_manager.get_debug_info()
             
-            if tts_stats['recent_requests']:
-                print("\nПоследние запросы:")
-                for req in tts_stats['recent_requests'][-5:]:  # Показываем только 5 последних
-                    print(f"  {req}")
+            print("\n\n=== ОТЛАДОЧНАЯ ИНФОРМАЦИЯ ===")
+            print(f"Текущее меню: {debug_info.get('current_menu', 'Неизвестно')}")
+            
+            # Здесь может быть проблема, т.к. tts_enabled могло быть удалено
+            if 'tts_enabled' in debug_info:
+                print(f"Озвучка включена: {debug_info['tts_enabled']}")
+            
+            # Если есть статистика TTS
+            if 'tts' in debug_info and debug_info['tts']:
+                tts_stats = debug_info['tts']
+                print("\n--- Статистика TTS ---")
+                print(f"Всего запросов: {tts_stats.get('total_requests', 'н/д')}")
+                print(f"Запросов сегодня: {tts_stats.get('today_requests', 'н/д')}")
+                print(f"Примерно осталось запросов: {tts_stats.get('remaining_free_requests', 'н/д')}")
+                print(f"Использований кэша: {tts_stats.get('cached_used', 'н/д')}")
+                print(f"Текущий голос: {tts_stats.get('current_voice', 'н/д')}")
+                print(f"Движок TTS: {tts_stats.get('tts_engine', 'н/д')}")
+                
+            # Если есть метрики Google Cloud TTS
+            if 'google_cloud_tts' in debug_info:
+                gc_metrics = debug_info['google_cloud_tts']
+                print("\n--- Метрики Google Cloud TTS ---")
+                for key, value in gc_metrics.items():
+                    print(f"{key}: {value}")
+        except Exception as e:
+            print("\n=== Ошибка отладочной информации ===")
+            print(f"Не удалось показать отладочную информацию: {e}")
         
         print("\n=============================\n") 

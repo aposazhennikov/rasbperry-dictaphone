@@ -7,14 +7,19 @@ import subprocess
 import json
 from datetime import datetime
 from gtts import gTTS
+import importlib.util
+import sys
+import traceback
+from .google_tts_manager import GoogleTTSManager
 
 class TTSManager:
-    """Управление озвучкой текста с помощью gTTS"""
+    """Управление озвучкой текста с помощью gTTS или Google Cloud TTS"""
     
     # Лимит бесплатных запросов в день (приблизительная оценка)
     FREE_DAILY_LIMIT = 200
     
-    def __init__(self, cache_dir="/home/aleks/cache_tts", lang="ru", tld="com", debug=False, use_wav=True):
+    def __init__(self, cache_dir="/home/aleks/cache_tts", lang="ru", tld="com", debug=False, use_wav=True, 
+                 voice="ru-RU-Standard-A", settings_manager=None):
         """
         Инициализация менеджера TTS
         
@@ -24,6 +29,8 @@ class TTSManager:
             tld (str): Домен Google для TTS (com, ru, и т.д.)
             debug (bool): Режим отладки
             use_wav (bool): Использовать WAV вместо MP3 для более быстрого воспроизведения
+            voice (str): Идентификатор голоса для озвучки
+            settings_manager (SettingsManager): Менеджер настроек
         """
         self.cache_dir = cache_dir
         self.lang = lang
@@ -33,7 +40,23 @@ class TTSManager:
         self.cache_lock = threading.Lock()
         self.debug = debug
         self.use_wav = use_wav
+        self.voice = voice
+        self.settings_manager = settings_manager
+        self.google_tts_manager = None
         
+        # Определяем движок TTS
+        self.tts_engine = "gtts"  # По умолчанию используем gTTS
+        
+        if self.settings_manager:
+            # Получаем настройку из менеджера настроек
+            self.tts_engine = self.settings_manager.get_tts_engine()
+            if self.debug:
+                print(f"Используемый движок TTS: {self.tts_engine}")
+            
+            # Если выбран Google Cloud TTS, инициализируем его
+            if self.tts_engine == "google_cloud":
+                self._init_google_cloud_tts()
+                
         # Статистика для режима отладки
         self.stats_file = os.path.join(cache_dir, "tts_stats.json")
         self.stats = {
@@ -53,6 +76,127 @@ class TTSManager:
         
         # Обновляем счетчик дневных запросов
         self._update_day_counter()
+        
+    def _init_google_cloud_tts(self):
+        """Инициализирует Google Cloud TTS менеджер"""
+        try:
+            import importlib.util  # Явно импортируем модуль внутри функции
+            
+            # Отладочная информация
+            print("Начинаем инициализацию Google Cloud TTS")
+            print(f"Текущая директория: {os.getcwd()}")
+            print(f"Пути Python: {sys.path}")
+            
+            # Проверяем доступность модуля
+            if importlib.util.find_spec("google.cloud.texttospeech") is not None:
+                print("Модуль google.cloud.texttospeech найден")
+                
+                # Попытка импорта напрямую из текущего пакета
+                try:
+                    print("Пробуем импортировать GoogleTTSManager из текущего пакета")
+                    # Обратите внимание на точку - это важно для относительного импорта
+                    from .google_tts_manager import GoogleTTSManager
+                    print("Импорт успешен!")
+                except ImportError as e:
+                    print(f"Ошибка импорта из текущего пакета: {e}")
+                    # Попробуем альтернативный метод импорта
+                    try:
+                        print("Пробуем альтернативный метод импорта")
+                        import importlib.util
+                        spec = importlib.util.spec_from_file_location(
+                            "google_tts_manager", 
+                            os.path.join(os.path.dirname(__file__), "google_tts_manager.py")
+                        )
+                        google_tts_module = importlib.util.module_from_spec(spec)
+                        spec.loader.exec_module(google_tts_module)
+                        GoogleTTSManager = google_tts_module.GoogleTTSManager
+                        print("Альтернативный импорт успешен!")
+                    except Exception as e:
+                        print(f"Ошибка альтернативного импорта: {e}")
+                        raise
+                
+                # Получаем путь к файлу с учетными данными
+                credentials_file = self.settings_manager.get_google_cloud_credentials()
+                print(f"Путь к учетным данным: {credentials_file}")
+                
+                # Создаем экземпляр менеджера Google Cloud TTS
+                self.google_tts_manager = GoogleTTSManager(
+                    cache_dir=self.cache_dir,
+                    credentials_file=credentials_file,
+                    lang=self.lang,
+                    debug=self.debug,
+                    use_wav=self.use_wav,
+                    voice=self.voice
+                )
+                
+                if self.debug:
+                    print(f"Google Cloud TTS менеджер инициализирован успешно")
+            else:
+                print("Библиотека Google Cloud Text-to-Speech не установлена")
+                print("Для установки выполните: pip install google-cloud-texttospeech")
+                # Переключаемся на gTTS
+                self.tts_engine = "gtts"
+                if self.settings_manager:
+                    self.settings_manager.set_tts_engine("gtts")
+        except Exception as e:
+            print(f"Ошибка при инициализации Google Cloud TTS: {e}")
+            import traceback
+            print("Стек вызовов:")
+            traceback.print_exc()
+            # Переключаемся на gTTS
+            self.tts_engine = "gtts"
+            if self.settings_manager:
+                self.settings_manager.set_tts_engine("gtts")
+    
+    def set_tts_engine(self, engine):
+        """
+        Устанавливает движок TTS
+        
+        Args:
+            engine (str): Название движка TTS (gtts или google_cloud)
+            
+        Returns:
+            bool: True если успешно, иначе False
+        """
+        if engine not in ["gtts", "google_cloud"]:
+            return False
+            
+        # Если движок уже установлен, ничего не делаем
+        if self.tts_engine == engine:
+            return True
+            
+        self.tts_engine = engine
+        
+        # Если выбран Google Cloud TTS, инициализируем его
+        if engine == "google_cloud":
+            if not self.google_tts_manager:
+                self._init_google_cloud_tts()
+                
+            # Если инициализация не удалась, возвращаем False
+            if self.tts_engine != "google_cloud":
+                return False
+        
+        # Сохраняем настройку
+        if self.settings_manager:
+            self.settings_manager.set_tts_engine(engine)
+            
+        return True
+        
+    def set_voice(self, voice):
+        """
+        Устанавливает голос для озвучки
+        
+        Args:
+            voice (str): Идентификатор голоса
+        """
+        self.voice = voice
+        
+        # Если используем Google Cloud TTS, передаем настройку ему тоже
+        if self.tts_engine == "google_cloud" and self.google_tts_manager:
+            self.google_tts_manager.set_voice(voice)
+            
+        if self.debug:
+            print(f"Установлен голос: {voice}")
         
     def _load_stats(self):
         """Загружает статистику из файла"""
@@ -83,11 +227,18 @@ class TTSManager:
             
     def get_debug_info(self):
         """
-        Возвращает отладочную информацию
+        Возвращает отладочную информацию для текущего состояния меню
         
         Returns:
-            dict: Статистика использования TTS
+            dict: Словарь с отладочной информацией
         """
+        debug_info = {
+            "current_menu": self.current_menu.name if self.current_menu else "None",
+            "menu_items": [item.name for item in self.current_menu.items] if self.current_menu else [],
+            # Безопасное получение атрибута с проверкой его наличия
+            "current_index": getattr(self.current_menu, 'current_index', 0) if self.current_menu else -1
+        }
+        
         # Обновляем счетчик дневных запросов
         self._update_day_counter()
         
@@ -101,37 +252,64 @@ class TTSManager:
                 f"{entry['text'][:20]}... - {entry['time']:.2f}с - {entry['date']}"
             )
         
-        return {
+        debug_info.update({
             "total_requests": self.stats["total_requests"],
             "today_requests": self.stats["today_requests"],
             "remaining_free_requests": remaining,
             "cached_used": self.stats["cached_used"],
-            "recent_requests": formatted_history
-        }
+            "recent_requests": formatted_history,
+            "current_voice": self.voice,
+            "tts_engine": self.tts_engine
+        })
+        
+        return debug_info
     
-    def get_cached_filename(self, text, use_wav=None):
+    def get_cached_filename(self, text, use_wav=None, voice=None):
         """
-        Создает имя файла на основе хэша текста
+        Создает имя файла на основе текста и голоса в читаемом формате
         
         Args:
             text (str): Текст для озвучки
             use_wav (bool, optional): Использовать WAV вместо MP3
+            voice (str, optional): Идентификатор голоса
             
         Returns:
             str: Путь к файлу
         """
+        # Если используем Google Cloud TTS, делегируем ему получение имени файла
+        if self.tts_engine == "google_cloud" and self.google_tts_manager:
+            return self.google_tts_manager.get_cached_filename(text, use_wav, voice)
+        
         # Если use_wav не указан, используем значение по умолчанию
         if use_wav is None:
             use_wav = self.use_wav
             
-        # Создаем хэш текста для уникального имени файла
-        text_hash = hashlib.md5(text.encode('utf-8')).hexdigest()
+        # Если voice не указан, используем текущий голос
+        if voice is None:
+            voice = self.voice
+            
+        # Создаем понятное имя файла на основе текста
+        # 1. Заменяем пробелы и специальные символы на подчеркивания
+        # 2. Ограничиваем длину имени файла
+        # 3. Добавляем идентификатор голоса
+        safe_text = text[:30]  # Берем только первые 30 символов
+        safe_text = ''.join(c if c.isalnum() or c.isspace() else '_' for c in safe_text)
+        safe_text = safe_text.replace(' ', '_').lower()
+        
+        # Добавляем короткое обозначение голоса
+        voice_short = voice.split('-')[-1]  # Берем только последнюю часть, например "A" из "ru-RU-Standard-A"
+        
+        # Создаем имя файла, но также добавляем хеш для уникальности
+        text_hash = hashlib.md5(f"{text}_{voice}".encode('utf-8')).hexdigest()[:8]
+        
+        # Формируем имя файла
+        filename = f"{safe_text}_{voice_short}_{text_hash}"
         
         # Возвращаем имя файла с соответствующим расширением
         if use_wav:
-            return os.path.join(self.cache_dir, f"{text_hash}_{self.lang}.wav")
+            return os.path.join(self.cache_dir, f"{filename}.wav")
         else:
-            return os.path.join(self.cache_dir, f"{text_hash}_{self.lang}.mp3")
+            return os.path.join(self.cache_dir, f"{filename}.mp3")
     
     def mp3_to_wav(self, mp3_file):
         """
@@ -169,24 +347,33 @@ class TTSManager:
             print("mpg123 не найден, конвертация невозможна")
             return None
             
-    def generate_speech(self, text, force_regenerate=False):
+    def generate_speech(self, text, force_regenerate=False, voice=None):
         """
         Генерирует озвучку текста и сохраняет в кэш
         
         Args:
             text (str): Текст для озвучки
             force_regenerate (bool): Пересоздать файл, даже если он уже существует
+            voice (str, optional): Идентификатор голоса
             
         Returns:
             str: Путь к сгенерированному файлу
         """
-        # Сначала получаем имя MP3 файла
-        mp3_file = self.get_cached_filename(text, use_wav=False)
+        # Если используем Google Cloud TTS, делегируем ему генерацию
+        if self.tts_engine == "google_cloud" and self.google_tts_manager:
+            return self.google_tts_manager.generate_speech(text, force_regenerate, voice)
+        
+        # Используем указанный голос или текущий по умолчанию
+        if voice is None:
+            voice = self.voice
+            
+        # Сначала получаем имя MP3 файла с учетом голоса
+        mp3_file = self.get_cached_filename(text, use_wav=False, voice=voice)
         
         # Если нужен WAV, определяем его имя
         wav_file = None
         if self.use_wav:
-            wav_file = self.get_cached_filename(text, use_wav=True)
+            wav_file = self.get_cached_filename(text, use_wav=True, voice=voice)
         
         with self.cache_lock:
             # Проверяем наличие файлов в кэше
@@ -201,7 +388,7 @@ class TTSManager:
                 self._save_stats()
                 
                 if self.debug:
-                    print(f"Использован кэш для: {text}")
+                    print(f"Использован кэш для: {text} (голос: {voice})")
                     
                 return wav_file if self.use_wav else mp3_file
             
@@ -215,12 +402,12 @@ class TTSManager:
                     self._save_stats()
                     
                     if self.debug:
-                        print(f"Использован кэш (конвертация в WAV) для: {text}")
+                        print(f"Использован кэш (конвертация в WAV) для: {text} (голос: {voice})")
                         
                     return wav_result
                 
             if self.debug:
-                print(f"Генерация озвучки для: {text}")
+                print(f"Генерация озвучки для: {text} (голос: {voice})")
                 
             # Увеличиваем счетчики запросов
             self.stats["total_requests"] += 1
@@ -231,6 +418,8 @@ class TTSManager:
             
             try:
                 # Создаем объект gTTS и сохраняем в MP3-файл
+                # Обратите внимание, что gTTS не поддерживает выбор конкретного голоса напрямую,
+                # но мы все равно храним разные файлы для разных голосов
                 tts = gTTS(text=text, lang=self.lang, tld=self.tld, slow=False)
                 tts.save(mp3_file)
                 
@@ -248,135 +437,131 @@ class TTSManager:
                 self.stats["requests_history"].append({
                     "text": text,
                     "time": elapsed_time,
-                    "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "voice": voice
                 })
                 
-                # Ограничиваем историю последними 100 запросами
+                # Ограничиваем историю до 100 последних запросов
                 if len(self.stats["requests_history"]) > 100:
                     self.stats["requests_history"] = self.stats["requests_history"][-100:]
-                
+                    
                 # Сохраняем статистику
                 self._save_stats()
                 
-                if self.debug:
-                    print(f"Озвучка сгенерирована за {elapsed_time:.2f} секунд")
-                    print(f"Сегодня выполнено {self.stats['today_requests']} запросов из примерно {self.FREE_DAILY_LIMIT}")
-                
                 return result_file
-                
             except Exception as e:
                 print(f"Ошибка при генерации озвучки: {e}")
                 return None
     
-    def play_speech(self, text):
+    def play_speech(self, text, voice=None):
         """
-        Воспроизводит озвучку текста
+        Воспроизводит озвученный текст
         
         Args:
             text (str): Текст для озвучки
-        """
-        self.stop_current_sound()
-        
-        # Получаем файл озвучки
-        speech_file = self.get_cached_filename(text, use_wav=self.use_wav)
-        
-        # Если файла нет в кэше, генерируем его
-        if not os.path.exists(speech_file):
-            speech_file = self.generate_speech(text)
-            if not speech_file:
-                return
-        else:
-            # Увеличиваем счётчик использования кэша
-            self.stats["cached_used"] += 1
-            self._save_stats()
-        
-        try:
-            # В Windows используем другой подход, чем в Linux
-            if os.name == 'nt':
-                # Бесшумный запуск на Windows
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                self.current_sound_process = subprocess.Popen(
-                    ["powershell", "-c", f"(New-Object Media.SoundPlayer '{speech_file}').PlaySync()"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    startupinfo=startupinfo
-                )
-            else:
-                # Определяем тип воспроизведения в зависимости от формата
-                if speech_file.endswith('.wav'):
-                    # Для WAV используем aplay
-                    self.current_sound_process = subprocess.Popen(
-                        ["aplay", "-q", speech_file],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                    )
-                else:
-                    # Для MP3 используем mpg123 с оптимизациями
-                    self.current_sound_process = subprocess.Popen(
-                        ["mpg123", "-q", "--no-control", "-Z", "--no-gapless", "-A", "hw:0", speech_file],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                    )
-                
-            self.is_playing = True
-            
-            # Ждем завершения воспроизведения в отдельном потоке
-            def wait_completion():
-                if self.current_sound_process:
-                    self.current_sound_process.wait()
-                    self.is_playing = False
-                    self.current_sound_process = None
-            
-            threading.Thread(target=wait_completion, daemon=True).start()
-            
-        except Exception as e:
-            print(f"Ошибка при воспроизведении: {e}")
-    
-    def stop_current_sound(self):
-        """Останавливает текущее воспроизведение"""
-        if self.current_sound_process and self.is_playing:
-            try:
-                self.current_sound_process.terminate()
-                self.is_playing = False
-                self.current_sound_process = None
-            except Exception as e:
-                print(f"Ошибка при остановке звука: {e}")
-    
-    def pre_generate_menu_items(self, menu_items):
-        """
-        Предварительно генерирует озвучку для всех пунктов меню
-        
-        Args:
-            menu_items (list): Список текстов пунктов меню
+            voice (str, optional): Идентификатор голоса
             
         Returns:
-            dict: Словарь с путями к файлам для каждого пункта меню
+            bool: True если воспроизведение запущено, иначе False
         """
-        results = {}
-        total_items = len(menu_items)
+        # Если используем Google Cloud TTS, делегируем ему воспроизведение
+        if self.tts_engine == "google_cloud" and self.google_tts_manager:
+            return self.google_tts_manager.play_speech(text, voice)
         
-        print(f"Предварительная генерация озвучки для {total_items} пунктов меню...")
-        
-        for i, item in enumerate(menu_items):
-            if item:
-                if self.debug:
-                    print(f"[{i+1}/{total_items}] Генерация: {item}")
-                results[item] = self.generate_speech(item)
-                
-        # Статистика сгенерированных файлов
-        new_files = len([f for f in results.values() if f])
-        print(f"Сгенерировано {new_files} файлов озвучки")
-        
-        # Если в режиме отладки, выводим дополнительную статистику
-        if self.debug:
-            debug_info = self.get_debug_info()
-            print("\n=== Статистика TTS ===")
-            print(f"Всего запросов к gTTS: {debug_info['total_requests']}")
-            print(f"Запросов сегодня: {debug_info['today_requests']}")
-            print(f"Примерно осталось бесплатных запросов: {debug_info['remaining_free_requests']}")
-            print(f"Использований кэша: {debug_info['cached_used']}")
+        # Используем указанный голос или текущий по умолчанию
+        if voice is None:
+            voice = self.voice
             
-            if debug_info['recent_requests']:
-                print("\nПоследние запросы:")
-                for req in debug_info['recent_requests']:
-                    print(f"  {req}")
+        # Если уже что-то воспроизводится, останавливаем
+        self.stop_current_sound()
         
-        return results
+        # Генерируем озвучку
+        audio_file = self.generate_speech(text, force_regenerate=False, voice=voice)
+        if not audio_file:
+            return False
+            
+        try:
+            # Запускаем процесс воспроизведения звука
+            if self.use_wav:
+                # Для WAV используем paplay или aplay
+                try:
+                    self.current_sound_process = subprocess.Popen(
+                        ["paplay", audio_file],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                    )
+                except:
+                    # Если paplay не доступен, пробуем aplay
+                    self.current_sound_process = subprocess.Popen(
+                        ["aplay", audio_file],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                    )
+            else:
+                # Для MP3 используем mpg123
+                self.current_sound_process = subprocess.Popen(
+                    ["mpg123", audio_file],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+                
+            # Запускаем поток ожидания завершения воспроизведения
+            self.is_playing = True
+            wait_thread = threading.Thread(target=self.wait_completion, daemon=True)
+            wait_thread.start()
+            
+            return True
+        except Exception as e:
+            print(f"Ошибка при воспроизведении звука: {e}")
+            return False
+    
+    def wait_completion(self):
+        """Ожидает завершения воспроизведения звука"""
+        if self.current_sound_process:
+            self.current_sound_process.wait()
+            self.is_playing = False
+            self.current_sound_process = None
+    
+    def stop_current_sound(self):
+        """Останавливает текущий воспроизводимый звук"""
+        # Если используем Google Cloud TTS, делегируем ему
+        if self.tts_engine == "google_cloud" and self.google_tts_manager:
+            return self.google_tts_manager.stop_current_sound()
+            
+        if self.current_sound_process and self.current_sound_process.poll() is None:
+            try:
+                self.current_sound_process.terminate()
+                self.current_sound_process.wait()
+            except:
+                pass
+                
+        self.is_playing = False
+        self.current_sound_process = None
+    
+    def pre_generate_menu_items(self, menu_items, voices=None):
+        """
+        Предварительно генерирует озвучки для пунктов меню
+        
+        Args:
+            menu_items (list): Список текстов для озвучки
+            voices (list, optional): Список голосов для предварительной генерации
+        """
+        # Если используем Google Cloud TTS, делегируем ему
+        if self.tts_engine == "google_cloud" and self.google_tts_manager:
+            return self.google_tts_manager.pre_generate_menu_items(menu_items, voices)
+            
+        if not voices:
+            voices = [self.voice]  # По умолчанию только текущий голос
+            
+        # Удаляем дубликаты из списка текстов
+        unique_items = set(menu_items)
+        
+        total_items = len(unique_items) * len(voices)
+        processed = 0
+        
+        if self.debug:
+            print(f"Предварительная генерация озвучки для {len(unique_items)} уникальных текстов в {len(voices)} голосах")
+        
+        for voice in voices:
+            for text in unique_items:
+                self.generate_speech(text, force_regenerate=False, voice=voice)
+                processed += 1
+                if self.debug:
+                    print(f"Предварительная генерация: {processed}/{total_items} - {text} (голос: {voice})")

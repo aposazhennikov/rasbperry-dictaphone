@@ -1,2 +1,4 @@
 evdev>=1.6.0
 gTTS>=2.3.1
+google-cloud-texttospeech>=2.14.1
+google-cloud-monitoring>=2.14.1
