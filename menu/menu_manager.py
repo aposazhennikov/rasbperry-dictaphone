@@ -1,15 +1,33 @@
 #!/usr/bin/env python3
 from .menu_item import MenuItem, SubMenu
 from .display_manager import DisplayManager
+from .tts_manager import TTSManager
 
 class MenuManager:
     """Класс для управления иерархическим меню"""
     
-    def __init__(self):
-        """Инициализация менеджера меню"""
+    def __init__(self, tts_enabled=True, cache_dir="/home/aleks/cache_tts", debug=False, use_wav=True):
+        """
+        Инициализация менеджера меню
+        
+        Args:
+            tts_enabled (bool): Включена ли озвучка
+            cache_dir (str): Директория для кэширования звуковых файлов
+            debug (bool): Режим отладки
+            use_wav (bool): Использовать WAV вместо MP3 для более быстрого воспроизведения
+        """
         self.root_menu = None
         self.current_menu = None
+        self.tts_enabled = tts_enabled
+        self.debug = debug
+        self.use_wav = use_wav
+        
+        # Инициализация менеджеров
         self.display_manager = DisplayManager(self)
+        
+        # Инициализация менеджера TTS
+        if self.tts_enabled:
+            self.tts_manager = TTSManager(cache_dir=cache_dir, debug=debug, use_wav=use_wav)
     
     def set_root_menu(self, menu):
         """
@@ -24,18 +42,34 @@ class MenuManager:
     def display_current_menu(self):
         """Отображает текущее меню"""
         self.display_manager.display_menu()
+        
+        # Озвучиваем название текущего меню
+        if self.tts_enabled and self.current_menu:
+            self.tts_manager.play_speech(f"Меню {self.current_menu.name}")
     
     def move_up(self):
         """Перемещение вверх по текущему меню"""
         if self.current_menu:
             self.current_menu.move_up()
             self.display_current_menu()
+            
+            # Озвучиваем текущий выбранный пункт
+            if self.tts_enabled:
+                current_item = self.current_menu.get_current_item()
+                if current_item:
+                    self.tts_manager.play_speech(current_item.get_speech_text())
     
     def move_down(self):
         """Перемещение вниз по текущему меню"""
         if self.current_menu:
             self.current_menu.move_down()
             self.display_current_menu()
+            
+            # Озвучиваем текущий выбранный пункт
+            if self.tts_enabled:
+                current_item = self.current_menu.get_current_item()
+                if current_item:
+                    self.tts_manager.play_speech(current_item.get_speech_text())
     
     def select_current_item(self):
         """Выбирает текущий пункт меню"""
@@ -56,8 +90,12 @@ class MenuManager:
             self.display_current_menu()
         elif result is not None:
             # Если результат не None и не подменю, 
-            # показываем сообщение с результатом
+            # показываем сообщение с результатом и озвучиваем его
             self.display_manager.display_message(str(result))
+            
+            if self.tts_enabled:
+                self.tts_manager.play_speech(str(result))
+                
             self.display_current_menu()
     
     def go_back(self):
@@ -65,12 +103,49 @@ class MenuManager:
         if self.current_menu and self.current_menu.parent:
             self.current_menu = self.current_menu.parent
             self.display_current_menu()
+            
+            # Озвучиваем возврат
+            if self.tts_enabled:
+                self.tts_manager.play_speech(f"Возврат в {self.current_menu.name}")
+                
         elif self.current_menu != self.root_menu:
             # Если нет родительского меню, но текущее меню не корневое,
             # возвращаемся в корневое меню
             self.current_menu = self.root_menu
             self.display_current_menu()
+            
+            # Озвучиваем возврат в главное меню
+            if self.tts_enabled:
+                self.tts_manager.play_speech("Возврат в главное меню")
     
+    def pre_generate_all_speech(self):
+        """Предварительно генерирует все звуки для меню"""
+        if not self.tts_enabled or not self.root_menu:
+            return
+        
+        # Собираем все тексты для озвучки
+        speech_texts = set()
+        
+        def collect_speech_texts(menu):
+            # Добавляем название меню
+            speech_texts.add(menu.get_speech_text())
+            speech_texts.add(f"Меню {menu.name}")
+            
+            # Добавляем все пункты меню
+            for item in menu.items:
+                speech_texts.add(item.get_speech_text())
+                if isinstance(item, SubMenu):
+                    collect_speech_texts(item)
+        
+        # Начинаем с корневого меню
+        collect_speech_texts(self.root_menu)
+        
+        # Добавляем системные сообщения
+        speech_texts.add("Возврат в главное меню")
+        
+        # Предварительно генерируем все звуки
+        self.tts_manager.pre_generate_menu_items(speech_texts)
+        
     def create_menu_structure(self):
         """Создает структуру меню согласно заданной схеме"""
         # Создаем главное меню
@@ -180,4 +255,26 @@ class MenuManager:
         # Устанавливаем главное меню как корневое
         self.set_root_menu(main_menu)
         
-        return main_menu 
+        # Предварительно генерируем все звуки для меню
+        if self.tts_enabled:
+            self.pre_generate_all_speech()
+        
+        return main_menu
+
+    def get_debug_info(self):
+        """
+        Возвращает отладочную информацию
+        
+        Returns:
+            dict: Информация о состоянии меню и озвучки
+        """
+        info = {
+            "current_menu": self.current_menu.name if self.current_menu else "None",
+            "tts_enabled": self.tts_enabled,
+            "tts_stats": None
+        }
+        
+        if self.tts_enabled:
+            info["tts_stats"] = self.tts_manager.get_debug_info()
+            
+        return info

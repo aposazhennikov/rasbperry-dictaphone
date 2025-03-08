@@ -40,6 +40,10 @@ class DisplayManager:
         print("↑/↓: Перемещение по меню")
         print("Enter: Выбор")
         print("Back: Возврат в предыдущее меню")
+        
+        # Если включен режим отладки, выводим отладочную информацию
+        if self.menu_manager.debug:
+            self.display_debug_info()
     
     def display_message(self, message, title=None):
         """
@@ -55,4 +59,32 @@ class DisplayManager:
             print(f"=== {title} ===\n")
             
         print(message)
-        print("\nНажмите любую клавишу для продолжения...") 
+        print("\nНажмите любую клавишу для продолжения...")
+        
+        # Если включен режим отладки, выводим отладочную информацию
+        if self.menu_manager.debug:
+            self.display_debug_info()
+            
+    def display_debug_info(self):
+        """Отображает отладочную информацию"""
+        debug_info = self.menu_manager.get_debug_info()
+        
+        print("\n\n=== ОТЛАДОЧНАЯ ИНФОРМАЦИЯ ===")
+        print(f"Текущее меню: {debug_info['current_menu']}")
+        print(f"Озвучка включена: {debug_info['tts_enabled']}")
+        
+        # Если есть статистика TTS
+        if debug_info['tts_stats']:
+            tts_stats = debug_info['tts_stats']
+            print("\n--- Статистика TTS ---")
+            print(f"Всего запросов: {tts_stats['total_requests']}")
+            print(f"Запросов сегодня: {tts_stats['today_requests']}")
+            print(f"Примерно осталось бесплатных запросов: {tts_stats['remaining_free_requests']}")
+            print(f"Использований кэша: {tts_stats['cached_used']}")
+            
+            if tts_stats['recent_requests']:
+                print("\nПоследние запросы:")
+                for req in tts_stats['recent_requests'][-5:]:  # Показываем только 5 последних
+                    print(f"  {req}")
+        
+        print("\n=============================\n") 
