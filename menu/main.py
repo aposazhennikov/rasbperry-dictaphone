@@ -22,6 +22,7 @@ def main():
     parser.add_argument('--voice', type=str, help='Идентификатор голоса для озвучки')
     parser.add_argument('--tts-engine', type=str, choices=['gtts', 'google_cloud'], help='Движок для синтеза речи (gtts или google_cloud)')
     parser.add_argument('--google-cloud-credentials', type=str, help='Путь к файлу с учетными данными Google Cloud')
+    parser.add_argument('--records-dir', type=str, default='/home/aleks/records', help='Директория для сохранения аудиозаписей')
     args = parser.parse_args()
     
     # Настраиваем обработчик Ctrl+C для корректного завершения
@@ -70,7 +71,8 @@ def main():
         cache_dir=args.cache_dir, 
         debug=args.debug,
         use_wav=not args.use_mp3,
-        settings_manager=settings_manager
+        settings_manager=settings_manager,
+        records_dir=args.records_dir
     )
     
     # Создаем структуру меню

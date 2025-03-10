@@ -617,4 +617,57 @@ class GoogleTTSManager:
             usage_info = self.get_usage_info()
             print(f"Использовано символов в этом месяце: {usage_info['monthly_chars_used']}")
             print(f"Осталось бесплатных символов: {usage_info['remaining_free_chars']}")
+            print(f"Общая стоимость: ${usage_info['estimated_cost']:.2f}")
+    
+    def pre_generate_missing_menu_items(self, menu_items, voices=None):
+        """
+        Предварительно генерирует только отсутствующие озвучки для пунктов меню
+        
+        Args:
+            menu_items (list): Список текстов для озвучки
+            voices (list, optional): Список голосов для предварительной генерации
+        """
+        if not voices:
+            voices = [self.voice]  # По умолчанию только текущий голос
+            
+        # Удаляем дубликаты из списка текстов
+        unique_items = set(menu_items)
+        
+        missing_items = []
+        
+        # Проверяем наличие файлов и составляем список отсутствующих
+        for voice in voices:
+            for text in unique_items:
+                # Получаем имя файла без проверки существования
+                filename = self.get_cached_filename(text, use_wav=False, voice=voice)
+                if not os.path.exists(filename):
+                    missing_items.append((text, voice))
+        
+        total_missing = len(missing_items)
+        processed = 0
+        total_chars = 0
+        
+        if self.debug:
+            print(f"Предварительная генерация отсутствующей озвучки: найдено {total_missing} из {len(unique_items) * len(voices)} возможных файлов")
+        
+        if total_missing == 0:
+            print("Все аудиофайлы Google Cloud TTS уже сгенерированы. Нет необходимости в дополнительной генерации.")
+            return
+        
+        for text, voice in missing_items:
+            self.generate_speech(text, force_regenerate=False, voice=voice)
+            processed += 1
+            total_chars += len(text)
+            if self.debug:
+                print(f"Генерация Google Cloud TTS: {processed}/{total_missing} - {text} (голос: {voice})")
+        
+        # Обновляем метрики использования
+        self._update_usage_metrics()
+        
+        if self.debug:
+            print(f"Генерация отсутствующих звуков завершена. Всего символов: {total_chars}")
+            print(f"Примерная стоимость: ${(total_chars / 1000000) * self.PRICING['standard']:.4f}")
+            usage_info = self.get_usage_info()
+            print(f"Использовано символов в этом месяце: {usage_info['monthly_chars_used']}")
+            print(f"Осталось бесплатных символов: {usage_info['remaining_free_chars']}")
             print(f"Общая стоимость: ${usage_info['estimated_cost']:.2f}") 

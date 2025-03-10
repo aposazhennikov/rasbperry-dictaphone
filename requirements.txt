@@ -2,3 +2,7 @@ evdev>=1.6.0
 gTTS>=2.3.1
 google-cloud-texttospeech>=2.14.1
 google-cloud-monitoring>=2.14.1
+sounddevice>=0.4.6
+soundfile>=0.12.1
+numpy>=1.22.0
+pydub>=0.25.1

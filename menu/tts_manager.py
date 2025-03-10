@@ -227,16 +227,18 @@ class TTSManager:
             
     def get_debug_info(self):
         """
-        Возвращает отладочную информацию для текущего состояния меню
+        Возвращает отладочную информацию для текущего состояния TTS менеджера
         
         Returns:
             dict: Словарь с отладочной информацией
         """
         debug_info = {
-            "current_menu": self.current_menu.name if self.current_menu else "None",
-            "menu_items": [item.name for item in self.current_menu.items] if self.current_menu else [],
-            # Безопасное получение атрибута с проверкой его наличия
-            "current_index": getattr(self.current_menu, 'current_index', 0) if self.current_menu else -1
+            "total_requests": self.stats["total_requests"],
+            "today_requests": self.stats["today_requests"],
+            "cached_used": self.stats["cached_used"],
+            "last_error": getattr(self, "last_error", None),
+            "current_voice": self.voice,
+            "tts_engine": self.settings_manager.get_tts_engine() if self.settings_manager else "unknown"
         }
         
         # Обновляем счетчик дневных запросов
@@ -253,13 +255,8 @@ class TTSManager:
             )
         
         debug_info.update({
-            "total_requests": self.stats["total_requests"],
-            "today_requests": self.stats["today_requests"],
             "remaining_free_requests": remaining,
-            "cached_used": self.stats["cached_used"],
-            "recent_requests": formatted_history,
-            "current_voice": self.voice,
-            "tts_engine": self.tts_engine
+            "recent_requests": formatted_history
         })
         
         return debug_info
@@ -565,3 +562,47 @@ class TTSManager:
                 processed += 1
                 if self.debug:
                     print(f"Предварительная генерация: {processed}/{total_items} - {text} (голос: {voice})")
+    
+    def pre_generate_missing_menu_items(self, menu_items, voices=None):
+        """
+        Предварительно генерирует только отсутствующие озвучки для пунктов меню
+        
+        Args:
+            menu_items (list): Список текстов для озвучки
+            voices (list, optional): Список голосов для предварительной генерации
+        """
+        # Если используем Google Cloud TTS, делегируем ему
+        if self.tts_engine == "google_cloud" and self.google_tts_manager:
+            return self.google_tts_manager.pre_generate_missing_menu_items(menu_items, voices)
+            
+        if not voices:
+            voices = [self.voice]  # По умолчанию только текущий голос
+            
+        # Удаляем дубликаты из списка текстов
+        unique_items = set(menu_items)
+        
+        missing_items = []
+        
+        # Проверяем наличие файлов и составляем список отсутствующих
+        for voice in voices:
+            for text in unique_items:
+                # Получаем имя файла без проверки существования
+                filename = self._get_voice_specific_filename(text, voice, check_exists=False)
+                if not os.path.exists(filename):
+                    missing_items.append((text, voice))
+        
+        total_missing = len(missing_items)
+        processed = 0
+        
+        if self.debug:
+            print(f"Предварительная генерация отсутствующей озвучки: найдено {total_missing} из {len(unique_items) * len(voices)} возможных файлов")
+        
+        if total_missing == 0:
+            print("Все аудиофайлы уже сгенерированы. Нет необходимости в дополнительной генерации.")
+            return
+        
+        for text, voice in missing_items:
+            self.generate_speech(text, force_regenerate=False, voice=voice)
+            processed += 1
+            if self.debug:
+                print(f"Генерация: {processed}/{total_missing} - {text} (голос: {voice})")

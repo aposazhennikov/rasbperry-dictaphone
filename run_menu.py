@@ -16,6 +16,7 @@ parser = argparse.ArgumentParser(description='Запуск иерархичес�
 parser.add_argument('--no-tts', action='store_true', help='Отключить озвучку')
 parser.add_argument('--cache-dir', type=str, default='/home/aleks/cache_tts', help='Директория для кэширования звуков')
 parser.add_argument('--pre-generate', action='store_true', help='Предварительно сгенерировать все звуки и выйти')
+parser.add_argument('--pre-generate-missing', action='store_true', help='Предварительно сгенерировать только отсутствующие звуки и выйти')
 parser.add_argument('--debug', action='store_true', help='Включить режим отладки с выводом диагностической информации')
 parser.add_argument('--use-mp3', action='store_true', help='Использовать MP3 вместо WAV для воспроизведения')
 parser.add_argument('--voice', type=str, help='Идентификатор голоса для озвучки')
@@ -25,7 +26,7 @@ parser.add_argument('--show-metrics', action='store_true', help='Показат�
 
 args = parser.parse_args()
 
-if args.pre_generate:
+if args.pre_generate or args.pre_generate_missing:
     print("Предварительная генерация звуков...")
     # Импортируем классы для генерации звуков
     from menu import MenuManager, SettingsManager
@@ -78,8 +79,14 @@ if args.pre_generate:
     if args.debug:
         print(f"Используемый голос: {args.voice if args.voice else 'все доступные голоса'}")
         print(f"Используемый движок TTS: {settings_manager.get_tts_engine()}")
-        
-    menu_manager.pre_generate_all_speech(voices=voices)
+    
+    # Выбираем нужный метод генерации в зависимости от флага
+    if args.pre_generate_missing:
+        print("Режим: генерация только отсутствующих файлов")
+        menu_manager.pre_generate_missing_speech(voices=voices)
+    else:
+        print("Режим: генерация всех файлов")
+        menu_manager.pre_generate_all_speech(voices=voices)
     
     print("\nГенерация звуков завершена.")
     

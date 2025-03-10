@@ -83,8 +83,33 @@ class InputHandler:
         key_code = event.code
         key_value = event.value  # 1 - нажата, 0 - отпущена
         
+        # Добавляем отладочный вывод для диагностики
+        if key_value == 1:
+            print(f"\n*** Нажата клавиша {key_code} ***")
+            
+            # Специальная обработка KEY_BACK для остановки записи
+            if key_code == KEY_BACK:
+                is_recording = self.menu_manager.recording_state.get("active", False)
+                print(f"KEY_BACK: запись активна: {is_recording}")
+                if is_recording:
+                    print("ВЫПОЛНЯЕМ КОМАНДУ ОСТАНОВКИ ЗАПИСИ")
+                    self.menu_manager._stop_recording()
+                    return
+        
+        # Получаем текущий экран из display_manager
+        current_screen = self.menu_manager.display_manager.current_screen
+        
         # Обрабатываем нажатие клавиш
         if key_value == 1:  # Клавиша нажата
+            # Проверяем, активна ли запись, независимо от текущего экрана
+            if self.menu_manager.recording_state.get("active", False):
+                print(f"Запись активна, обрабатываем команды для записи...")
+                if key_code == KEY_SELECT:  # KEY_SELECT - Пауза/Возобновить
+                    print("Выполняем _toggle_pause_recording")
+                    self.menu_manager._toggle_pause_recording()
+                    return
+            
+            # Стандартная обработка для экрана меню, если не в режиме записи
             if key_code == KEY_UP:
                 self.menu_manager.move_up()
             elif key_code == KEY_DOWN:
@@ -93,4 +118,4 @@ class InputHandler:
                 self.menu_manager.select_current_item()
             elif key_code == KEY_BACK:
                 self.menu_manager.go_back()
-            # Дополнительные клавиши можно добавить по необходимости 
+            # Дополнительные клавиши можно добавить по необходимости

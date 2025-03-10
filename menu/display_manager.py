@@ -13,6 +13,7 @@ class DisplayManager:
             menu_manager: Менеджер меню
         """
         self.menu_manager = menu_manager
+        self.current_screen = "menu"  # Текущий отображаемый экран (menu, recording, etc.)
     
     def clear_screen(self):
         """Очищает экран"""
@@ -98,4 +99,36 @@ class DisplayManager:
             print("\n=== Ошибка отладочной информации ===")
             print(f"Не удалось показать отладочную информацию: {e}")
         
-        print("\n=============================\n") 
+        print("\n=============================\n")
+
+    def display_recording_screen(self, status, time, folder=None):
+        """
+        Отображает экран записи с текущим статусом и временем
+        
+        Args:
+            status (str): Статус записи ('Recording' или 'Paused')
+            time (str): Текущее время записи в формате MM:SS
+            folder (str, optional): Папка для сохранения записи
+        """
+        self.clear_screen()
+        self.current_screen = "recording"
+        
+        # Отображаем заголовок
+        print("=== Запись аудио ===\n")
+        
+        # Отображаем статус и время
+        status_text = "Запись" if status == "Recording" else "Пауза"
+        print(f"Статус: {status_text}")
+        print(f"Время: {time}")
+        
+        if folder:
+            print(f"Папка: {folder}")
+        
+        # Отображаем доступные команды
+        print("\n--- Команды ---")
+        print("SELECT: Пауза/Возобновить")
+        print("BACK: Стоп, сохранение и возврат в меню")
+        
+        # Если включен режим отладки, выводим отладочную информацию
+        if self.menu_manager.debug:
+            self.display_debug_info() 
