@@ -91,8 +91,8 @@ class RecorderManager:
             if self.update_callback:
                 self.update_callback()
             
-            # Каждые 5 минут озвучиваем время записи
-            if int(time_sec) > 0 and int(time_sec) % 300 == 0:
+            # Озвучиваем время записи каждые 3 часа
+            if int(time_sec) > 0 and int(time_sec) % 10800 == 0:
                 self.announce_recording_time()
                 
         except Exception as e:
@@ -120,18 +120,28 @@ class RecorderManager:
                 # Проигрываем системное предупреждение
                 self.play_notification(self.low_disk_space_warning)
             
-            # Проигрываем звуковой сигнал начала записи
+            # 1. Сначала озвучиваем сообщение о начале записи
+            message = f"Начата запись в папку {folder}"
+            print(f"Воспроизведение сообщения: {message}")
+            self.play_notification(message)
+            
+            # Ждем, чтобы убедиться, что сообщение полностью воспроизведено
+            time.sleep(2)
+            
+            # 2. Проигрываем звуковой сигнал начала записи
             if self.beep_sound_path and os.path.exists(self.beep_sound_path):
                 try:
+                    print("Воспроизведение сигнала beep...")
                     subprocess.run(["aplay", self.beep_sound_path], check=False)
+                    # Небольшая пауза после звукового сигнала
+                    time.sleep(0.5)
                 except Exception as e:
                     print(f"Ошибка при воспроизведении сигнала: {e}")
             
-            # Начинаем запись
+            # 3. Теперь начинаем запись
+            print("Запуск записи...")
             if self.recorder.start_recording(folder):
-                # Озвучиваем сообщение о начале записи
-                message = f"Начата запись в папку {folder}"
-                self.play_notification(message)
+                print("Запись успешно начата")
                 return True
             else:
                 # Озвучиваем сообщение об ошибке
@@ -153,7 +163,10 @@ class RecorderManager:
         """
         try:
             if self.tts_manager:
-                self.tts_manager.speak_text(message)
+                # Получаем мужской голос из настроек (ru-RU-Standard-D)
+                voice_id = "ru-RU-Standard-D"
+                print(f"Воспроизведение уведомления голосом: {voice_id}")
+                self.tts_manager.speak_text(message, voice_id)
             else:
                 # Если TTS недоступен, используем aplay для воспроизведения звука
                 print(f"Уведомление: {message}")
@@ -286,31 +299,57 @@ class RecorderManager:
             # Получаем текущую папку для записи
             folder = self.recorder.get_current_folder()
             
-            # Проигрываем звуковое уведомление о завершении записи
-            self.play_notification("Запись завершается")
-            
+            # ЭТАП 1: Озвучиваем завершение записи
+            print("Воспроизведение сообщения 'Запись завершается'...")
             try:
-                # Используем звуковой сигнал с aplay
-                subprocess.run(["aplay", "/home/aleks/main-sounds/stop.wav"], check=False)
+                # Используем самый надежный метод воспроизведения
+                if hasattr(self.tts_manager, 'play_speech_blocking'):
+                    self.tts_manager.play_speech_blocking("Запись завершается", voice_id="ru-RU-Standard-D")
+                else:
+                    self.play_notification("Запись завершается")
+                    time.sleep(1)  # Дополнительная пауза
             except Exception as e:
-                print(f"Ошибка при воспроизведении звукового сигнала остановки: {e}")
+                print(f"Ошибка при озвучивании завершения записи: {e}")
+                # Продолжаем несмотря на ошибку
                 
-            # Останавливаем запись и получаем путь к сохраненному файлу
+            # ЭТАП 2: Воспроизводим звуковой сигнал остановки
+            try:
+                print("Воспроизведение звука остановки записи...")
+                subprocess.run(["aplay", "/home/aleks/main-sounds/stop.wav"], 
+                              check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                time.sleep(0.5)  # Небольшая пауза
+            except Exception as e:
+                print(f"Ошибка при воспроизведении звука остановки: {e}")
+                
+            # ЭТАП 3: Останавливаем запись
             print("Останавливаем и сохраняем запись...")
             file_path = self.recorder.stop_recording()
             
+            # ЭТАП 4: Обрабатываем результат
             if file_path:
                 print(f"Запись успешно сохранена: {file_path}")
                 
+                # ЭТАП 5: Воспроизводим звук сохранения
                 try:
-                    # Используем звуковой сигнал для подтверждения сохранения
-                    subprocess.run(["aplay", "/home/aleks/main-sounds/saved.wav"], check=False)
+                    print("Воспроизведение звука сохранения...")
+                    subprocess.run(["aplay", "/home/aleks/main-sounds/saved.wav"], 
+                                  check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    time.sleep(0.5)  # Небольшая пауза
                 except Exception as e:
-                    print(f"Ошибка при воспроизведении звукового сигнала сохранения: {e}")
+                    print(f"Ошибка при воспроизведении звука сохранения: {e}")
                 
-                # Озвучиваем подтверждение сохранения
+                # ЭТАП 6: Озвучиваем подтверждение сохранения
                 message = f"Запись сохранена в папке {folder}"
-                self.play_notification(message)
+                print(f"Воспроизведение сообщения '{message}'...")
+                try:
+                    # Используем самый надежный метод воспроизведения
+                    if hasattr(self.tts_manager, 'play_speech_blocking'):
+                        self.tts_manager.play_speech_blocking(message, voice_id="ru-RU-Standard-D")
+                    else:
+                        self.play_notification(message)
+                        time.sleep(1)  # Дополнительная пауза
+                except Exception as e:
+                    print(f"Ошибка при озвучивании подтверждения: {e}")
                 
                 # Обновляем интерфейс
                 if self.update_callback:
@@ -319,7 +358,14 @@ class RecorderManager:
                 return file_path
             else:
                 print("Ошибка: Не удалось сохранить запись")
-                self.play_notification("Ошибка при сохранении записи")
+                try:
+                    # Используем самый надежный метод воспроизведения
+                    if hasattr(self.tts_manager, 'play_speech_blocking'):
+                        self.tts_manager.play_speech_blocking("Ошибка при сохранении записи", voice_id="ru-RU-Standard-D")
+                    else:
+                        self.play_notification("Ошибка при сохранении записи")
+                except Exception as e:
+                    print(f"Ошибка при озвучивании сообщения об ошибке: {e}")
                 return None
                 
         except Exception as e:
@@ -475,3 +521,38 @@ class RecorderManager:
             return "секунды"
         else:
             return "секунд"
+    
+    def play_notification_blocking(self, message):
+        """
+        Воспроизводит голосовое уведомление в блокирующем режиме
+        
+        Args:
+            message (str): Текст уведомления
+        """
+        try:
+            if self.tts_manager:
+                # Получаем мужской голос
+                voice_id = "ru-RU-Standard-D"
+                print(f"Блокирующее воспроизведение уведомления голосом {voice_id}: {message}")
+                
+                # Пытаемся найти звуковой файл для этого сообщения
+                if hasattr(self.tts_manager, 'get_cached_filename'):
+                    sound_file = self.tts_manager.get_cached_filename(message, voice=voice_id)
+                    if sound_file and os.path.exists(sound_file):
+                        # Используем aplay для гарантированного воспроизведения
+                        subprocess.run(["aplay", sound_file], 
+                                      check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        # Дополнительная пауза после воспроизведения
+                        time.sleep(0.3)
+                        return
+                
+                # Если файл не найден или возникла ошибка, используем стандартный метод
+                self.tts_manager.play_speech_blocking(message, voice_id=voice_id)
+            else:
+                # Если TTS недоступен, просто выводим сообщение
+                print(f"Уведомление (без TTS): {message}")
+                time.sleep(1)  # Имитация паузы для воспроизведения
+        except Exception as e:
+            error_msg = f"Ошибка при блокирующем воспроизведении уведомления: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)

@@ -131,15 +131,15 @@ class MenuManager:
                         voice_id = self._get_voice_id_for_menu_item(current_item.name)
                         if voice_id:
                             # Озвучиваем этот пункт с соответствующим голосом
-                            self.tts_manager.play_speech(current_item.get_speech_text(), voice=voice_id)
+                            self.tts_manager.play_speech(current_item.get_speech_text(), voice_id=voice_id)
                         else:
                             # Если не нашли соответствующий голос, используем текущий
                             voice = self.settings_manager.get_voice()
-                            self.tts_manager.play_speech(current_item.get_speech_text(), voice=voice)
+                            self.tts_manager.play_speech(current_item.get_speech_text(), voice_id=voice)
                     else:
                         # Для всех остальных меню используем текущий голос
                         voice = self.settings_manager.get_voice()
-                        self.tts_manager.play_speech(current_item.get_speech_text(), voice=voice)
+                        self.tts_manager.play_speech(current_item.get_speech_text(), voice_id=voice)
     
     def move_down(self):
         """Перемещение вниз по текущему меню"""
@@ -157,15 +157,15 @@ class MenuManager:
                         voice_id = self._get_voice_id_for_menu_item(current_item.name)
                         if voice_id:
                             # Озвучиваем этот пункт с соответствующим голосом
-                            self.tts_manager.play_speech(current_item.get_speech_text(), voice=voice_id)
+                            self.tts_manager.play_speech(current_item.get_speech_text(), voice_id=voice_id)
                         else:
                             # Если не нашли соответствующий голос, используем текущий
                             voice = self.settings_manager.get_voice()
-                            self.tts_manager.play_speech(current_item.get_speech_text(), voice=voice)
+                            self.tts_manager.play_speech(current_item.get_speech_text(), voice_id=voice)
                     else:
                         # Для всех остальных меню используем текущий голос
                         voice = self.settings_manager.get_voice()
-                        self.tts_manager.play_speech(current_item.get_speech_text(), voice=voice)
+                        self.tts_manager.play_speech(current_item.get_speech_text(), voice_id=voice)
     
     def _get_voice_id_for_menu_item(self, menu_item_name):
         """
@@ -212,7 +212,7 @@ class MenuManager:
             if self.tts_enabled:
                 # Получаем текущий голос из настроек
                 voice = self.settings_manager.get_voice()
-                self.tts_manager.play_speech(str(result), voice=voice)
+                self.tts_manager.play_speech(str(result), voice_id=voice)
                 
             self.display_current_menu()
     
@@ -226,7 +226,7 @@ class MenuManager:
             if self.tts_enabled:
                 # Получаем текущий голос из настроек
                 voice = self.settings_manager.get_voice()
-                self.tts_manager.play_speech(f"Возврат в {self.current_menu.name}", voice=voice)
+                self.tts_manager.play_speech(f"Возврат в {self.current_menu.name}", voice_id=voice)
                 
         elif self.current_menu != self.root_menu:
             # Если нет родительского меню, но текущее меню не корневое,
@@ -238,7 +238,7 @@ class MenuManager:
             if self.tts_enabled:
                 # Получаем текущий голос из настроек
                 voice = self.settings_manager.get_voice()
-                self.tts_manager.play_speech("Возврат в главное меню", voice=voice)
+                self.tts_manager.play_speech("Возврат в главное меню", voice_id=voice)
     
     def pre_generate_all_speech(self, voices=None):
         """
@@ -352,7 +352,7 @@ class MenuManager:
             if self.debug:
                 print(f"Голос {voice_id} уже выбран")
             message = "Этот голос уже выбран"
-            self.tts_manager.play_speech(message, voice=voice_id)
+            self.tts_manager.play_speech(message, voice_id=voice_id)
             return message
             
         # Изменяем голос в настройках
@@ -364,7 +364,7 @@ class MenuManager:
             message = "Голос успешно изменен"
             
             # Явно передаем идентификатор голоса для корректной озвучки
-            self.tts_manager.play_speech(message, voice=voice_id)
+            self.tts_manager.play_speech(message, voice_id=voice_id)
             
             # Отладочная информация
             if self.debug:
@@ -651,6 +651,15 @@ class MenuManager:
                 result = self.recorder_manager.resume_recording()
                 if result:
                     print("Запись успешно возобновлена")
+                    # Обновляем состояние паузы
+                    self.recording_state["paused"] = False
+                    
+                    # Обновляем отображение экрана записи
+                    self.display_manager.display_recording_screen(
+                        status="Recording",
+                        time=self.recording_state["formatted_time"],
+                        folder=self.recording_state["folder"]
+                    )
                 else:
                     print("ОШИБКА: Не удалось возобновить запись!")
             else:
@@ -659,6 +668,15 @@ class MenuManager:
                 result = self.recorder_manager.pause_recording()
                 if result:
                     print("Запись успешно приостановлена")
+                    # Обновляем состояние паузы
+                    self.recording_state["paused"] = True
+                    
+                    # Обновляем отображение экрана записи
+                    self.display_manager.display_recording_screen(
+                        status="Paused",
+                        time=self.recording_state["formatted_time"],
+                        folder=self.recording_state["folder"]
+                    )
                 else:
                     print("ОШИБКА: Не удалось приостановить запись!")
             
@@ -666,10 +684,11 @@ class MenuManager:
             print(f"Статус записи: активна={self.recording_state['active']}, "
                 f"на паузе={self.recording_state['paused']}, "
                 f"папка={self.recording_state['folder']}, "
-                f"время={self.recording_state['time']}")
+                f"время={self.recording_state['formatted_time']}")
                 
         except Exception as e:
             print(f"КРИТИЧЕСКАЯ ОШИБКА при переключении паузы: {e}")
+            sentry_sdk.capture_exception(e)
     
     def _stop_recording(self):
         """Останавливает запись и сохраняет файл"""
@@ -679,8 +698,14 @@ class MenuManager:
         
         print("\n*** ОСТАНОВКА ЗАПИСИ ***")
         folder = self.recording_state["folder"]
+        parent_menu = None
         
         try:
+            # Запоминаем родительское меню перед тем как остановить запись
+            if hasattr(self, 'current_menu') and self.current_menu and hasattr(self.current_menu, 'parent'):
+                parent_menu = self.current_menu.parent
+                print(f"Запоминаем родительское меню: {parent_menu.name if parent_menu else 'None'}")
+            
             # Останавливаем запись
             print("Вызываем recorder_manager.stop_recording()...")
             file_path = self.recorder_manager.stop_recording()
@@ -694,36 +719,41 @@ class MenuManager:
             # Даже если файл не сохранился, все равно озвучиваем что-то
             if not file_path:
                 print("ОШИБКА: Не удалось сохранить запись!")
-                # Озвучивание ошибки уже происходит в recorder_manager.stop_recording()
             else:
                 print(f"Запись сохранена в файл: {file_path}")
-                # Озвучивание успеха уже происходит в recorder_manager.stop_recording()
             
-            # Важная задержка перед переключением в меню!
-            # Даем время для полного воспроизведения всех голосовых сообщений
-            print("Небольшая задержка перед возвратом в меню...")
-            time.sleep(0.5)
+            # Значительная задержка для полного воспроизведения всех сообщений
+            # Сообщения "Запись завершается" и "Запись сохранена в папке X" должны воспроизвестись полностью
+            print("Ожидание окончания воспроизведения системных сообщений (3 секунды)...")
+            time.sleep(2)
             
-            # Переходим к родительскому меню (независимо от результата)
-            if self.current_menu and self.current_menu.parent:
-                print("Возвращаемся в родительское меню...")
-                self.current_menu = self.current_menu.parent
-                self.display_current_menu()
+            # Возвращаемся в родительское меню
+            if parent_menu:
+                print(f"Возвращаемся в родительское меню: {parent_menu.name}")
+                self.current_menu = parent_menu
             else:
-                print("Нет родительского меню, остаемся на текущем экране")
-                self.display_current_menu()
-                
+                print("Родительское меню не найдено, возвращаемся в корневое меню")
+                self.current_menu = self.root_menu
+            
+            # Отображаем меню
+            self.display_current_menu()
+            
         except Exception as e:
-            print(f"КРИТИЧЕСКАЯ ОШИБКА в _stop_recording: {e}")
+            print(f"КРИТИЧЕСКАЯ ОШИБКА при остановке записи: {e}")
+            sentry_sdk.capture_exception(e)
             
-            # Даже в случае ошибки даем небольшое время для воспроизведения
-            time.sleep(0.5)
-            
-            # В случае ошибки тоже возвращаемся в родительское меню
-            if self.current_menu and self.current_menu.parent:
-                print("Возвращаемся в родительское меню после ошибки...")
-                self.current_menu = self.current_menu.parent
+            # В случае ошибки все равно пытаемся вернуться в меню
+            try:
+                # Даем время для завершения аудио сообщений
+                time.sleep(3)
+                
+                if parent_menu:
+                    self.current_menu = parent_menu
+                else:
+                    self.current_menu = self.root_menu
                 self.display_current_menu()
+            except Exception as menu_e:
+                print(f"Ошибка при возврате в меню: {menu_e}")
     
     def _show_folder_selection_menu(self):
         """Показывает меню выбора папки для записи"""

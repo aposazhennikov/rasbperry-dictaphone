@@ -147,10 +147,36 @@ class InputHandler:
     def _handle_key_press(self, key_code):
         """Обрабатывает нажатие клавиши"""
         try:
+            # Даем приоритет кнопке BACK во всех режимах
+            if key_code == KEY_BACK:
+                # Проверяем, активна ли запись
+                recording_active = getattr(self.menu_manager, 'recording_state', {}).get('active', False)
+                if recording_active:
+                    print("InputHandler: Нажатие KEY_BACK в режиме записи - останавливаем запись")
+                    self.menu_manager._stop_recording()
+                    return
+                else:
+                    # Если запись не активна, просто возвращаемся назад
+                    self.menu_manager.go_back()
+                    return
+                
+            # Проверяем, активна ли запись
+            recording_active = getattr(self.menu_manager, 'recording_state', {}).get('active', False)
+            if recording_active:
+                print(f"InputHandler: Нажатие кнопки {key_code} в режиме записи")
+                # В режиме записи KEY_SELECT переключает паузу
+                if key_code == KEY_SELECT:
+                    print("InputHandler: Переключаем паузу записи")
+                    self.menu_manager._toggle_pause_recording()
+                    return
+                # Игнорируем остальные кнопки в режиме записи
+                return
+            
             # Обработка нажатий для режима воспроизведения
             playback_manager = getattr(self.menu_manager, 'playback_manager', None)
             if playback_manager and playback_manager.is_playing():
                 playback_manager.handle_key_press(key_code, True)
+                return
                 
             # Обработка нажатий для основного меню
             if key_code == KEY_UP:
@@ -159,8 +185,6 @@ class InputHandler:
                 self.menu_manager.move_down()
             elif key_code == KEY_SELECT:
                 self.menu_manager.select_current_item()
-            elif key_code == KEY_BACK:
-                self.menu_manager.go_back()
                 
             # Запоминаем состояние и время для клавиш, которые можно удерживать
             if key_code in self.key_states:

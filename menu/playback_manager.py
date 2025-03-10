@@ -686,6 +686,21 @@ class PlaybackManager:
         """
         return self.return_to_menu
     
+    def is_playing(self):
+        """
+        Проверяет, активно ли воспроизведение в данный момент
+        
+        Returns:
+            bool: True, если воспроизведение активно (даже если на паузе), иначе False
+        """
+        try:
+            return self.playback_info["active"]
+        except Exception as e:
+            error_msg = f"Ошибка при проверке статуса воспроизведения: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return False
+    
     def clean_up(self):
         """Освобождает ресурсы"""
         if self.player:
