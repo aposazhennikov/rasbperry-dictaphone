@@ -6,3 +6,5 @@ sounddevice>=0.4.6
 soundfile>=0.12.1
 numpy>=1.22.0
 pydub>=0.25.1
+setuptools>=44.0.0
+sentry-sdk>=1.40.1

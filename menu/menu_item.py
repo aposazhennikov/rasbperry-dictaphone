@@ -74,3 +74,6 @@ class SubMenu(MenuItem):
         if not self.items:
             return
         self.current_selection = (self.current_selection + 1) % len(self.items)
+
+# Добавляем псевдоним для SubMenu, чтобы исправить импорты
+Menu = SubMenu

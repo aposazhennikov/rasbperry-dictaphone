@@ -4,6 +4,7 @@ import time
 import threading
 from .audio_recorder import AudioRecorder
 import subprocess
+import sentry_sdk
 
 class RecorderManager:
     """Класс для управления записью аудио и взаимодействия с пользовательским интерфейсом"""
@@ -33,108 +34,144 @@ class RecorderManager:
         # Создаем директории для записей, если их нет
         self._create_directories()
         
+        # Системные сообщения
+        self.low_disk_space_warning = "Внимание, на устройстве осталось менее 1GB памяти, рекомендуется освободить память устройства"
+        self.max_duration_warning = "Порог записи длительность 3 часа достигнут завершаю и сохраняю запись во избежание ошибок"
+        
         if self.debug:
             print("RecorderManager инициализирован")
+            
+        # Регистрируем обработчик для системных сообщений
+        self.recorder.set_timer_callback(self._timer_callback)
     
     def _create_directories(self):
         """Создает директории для записей"""
-        if not os.path.exists(self.base_dir):
-            if self.debug:
-                print(f"Создаем директорию для записей: {self.base_dir}")
-            os.makedirs(self.base_dir)
-        
-        # Создаем поддиректории A, B, C
-        for folder in ['A', 'B', 'C']:
-            folder_path = os.path.join(self.base_dir, folder)
-            if not os.path.exists(folder_path):
+        try:
+            if not os.path.exists(self.base_dir):
                 if self.debug:
-                    print(f"Создаем директорию: {folder_path}")
-                os.makedirs(folder_path)
+                    print(f"Создаём директорию для записей: {self.base_dir}")
+                os.makedirs(self.base_dir)
+                
+            # Создаём поддиректории A, B, C
+            for folder in ['A', 'B', 'C']:
+                folder_path = os.path.join(self.base_dir, folder)
+                if not os.path.exists(folder_path):
+                    if self.debug:
+                        print(f"Создаём директорию: {folder_path}")
+                    os.makedirs(folder_path)
+        except Exception as e:
+            error_msg = f"Ошибка при создании директорий: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
     
     def set_update_callback(self, callback):
         """
-        Устанавливает функцию обратного вызова для обновления интерфейса
+        Устанавливает функцию обратного вызова для обновления информации о записи
         
         Args:
-            callback (callable): Функция, которая будет вызываться при обновлении статуса записи
+            callback (callable): Функция, которая будет вызываться при обновлении информации
+                                о статусе записи, времени и т.д.
         """
         self.update_callback = callback
-        
-        # Устанавливаем колбэк для обновления времени в рекордере
-        self.recorder.set_timer_callback(self._timer_callback)
     
-    def _timer_callback(self, elapsed_time):
+    def _timer_callback(self, time_sec):
         """
-        Обрабатывает обновление времени записи
+        Обработчик обновления таймера записи
         
         Args:
-            elapsed_time (float): Прошедшее время в секундах
+            time_sec (float): Текущее время записи в секундах
         """
-        self.current_time = elapsed_time
-        
-        # Вызываем колбэк для обновления интерфейса, если он установлен
-        if self.update_callback:
-            self.update_callback()
+        try:
+            self.current_time = time_sec
+            
+            # Форматируем время в удобный вид (MM:SS)
+            formatted_time = self.get_formatted_time()
+            
+            # Вызываем колбэк обновления UI, если он установлен
+            if self.update_callback:
+                self.update_callback()
+            
+            # Каждые 5 минут озвучиваем время записи
+            if int(time_sec) > 0 and int(time_sec) % 300 == 0:
+                self.announce_recording_time()
+                
+        except Exception as e:
+            error_msg = f"Ошибка в обработчике таймера: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
     
     def start_recording(self, folder):
         """
-        Начинает запись в указанную папку
+        Начинает запись аудио в указанную папку
         
         Args:
-            folder (str): Папка для записи ('A', 'B' или 'C')
+            folder (str): Папка для сохранения записи (A, B или C)
             
         Returns:
-            bool: True, если запись успешно начата
+            bool: True, если запись успешно начата, False в противном случае
         """
-        # Проверяем, что папка существует
-        folder_path = os.path.join(self.base_dir, folder)
-        if not os.path.exists(folder_path):
-            if self.debug:
-                print(f"Создаем директорию {folder_path}")
-            os.makedirs(folder_path)
-        
-        # Сначала озвучиваем начало записи
-        if self.debug:
-            print("Подготовка к записи...")
-        self.tts_manager.play_speech(f"Запись началась")
-        
-        # Ждем короткое время
-        time.sleep(0.5)
-        
-        # Воспроизводим звуковой сигнал
-        if os.path.exists(self.beep_sound_path):
-            # Используем subprocess для воспроизведения звука напрямую
-            try:
-                if self.debug:
-                    print("Воспроизведение звукового сигнала...")
-                subprocess.run(["aplay", "-q", self.beep_sound_path], 
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            # Проверяем свободное место перед началом записи
+            has_space, free_space = self.recorder.check_disk_space()
+            
+            # Если мало места, выдаем предупреждение
+            if not has_space:
+                print("Предупреждение о малом количестве места на диске")
+                # Проигрываем системное предупреждение
+                self.play_notification(self.low_disk_space_warning)
+            
+            # Проигрываем звуковой сигнал начала записи
+            if self.beep_sound_path and os.path.exists(self.beep_sound_path):
+                try:
+                    subprocess.run(["aplay", self.beep_sound_path], check=False)
+                except Exception as e:
+                    print(f"Ошибка при воспроизведении сигнала: {e}")
+            
+            # Начинаем запись
+            if self.recorder.start_recording(folder):
+                # Озвучиваем сообщение о начале записи
+                message = f"Начата запись в папку {folder}"
+                self.play_notification(message)
+                return True
+            else:
+                # Озвучиваем сообщение об ошибке
+                self.play_notification("Не удалось начать запись")
+                return False
                 
-                # Добавляем паузу после звукового сигнала перед началом записи
-                if self.debug:
-                    print(f"Пауза 0.3 секунды после звукового сигнала...")
-                time.sleep(0.3)
-                
-                if self.debug:
-                    print("Сигнал завершен, начинаем запись...")
-            except Exception as e:
-                if self.debug:
-                    print(f"Ошибка при воспроизведении звукового сигнала: {e}")
-        else:
-            if self.debug:
-                print(f"Файл звукового сигнала не найден: {self.beep_sound_path}")
-        
-        # Запускаем запись
-        result = self.recorder.start_recording(folder)
-        
-        # Немедленно обновляем информацию
-        if result and self.update_callback:
-            if self.debug:
-                print("Запись началась, обновляем интерфейс...")
-            self.update_callback()
-        
-        return result
+        except Exception as e:
+            error_msg = f"Ошибка при начале записи: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return False
     
+    def play_notification(self, message):
+        """
+        Воспроизводит голосовое уведомление
+        
+        Args:
+            message (str): Текст уведомления
+        """
+        try:
+            if self.tts_manager:
+                self.tts_manager.speak_text(message)
+            else:
+                # Если TTS недоступен, используем aplay для воспроизведения звука
+                print(f"Уведомление: {message}")
+        except Exception as e:
+            error_msg = f"Ошибка при воспроизведении уведомления: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            
+            # Запасной вариант - напрямую через aplay
+            try:
+                # Создаем временный текстовый файл с сообщением
+                with open("/tmp/notification.txt", "w") as f:
+                    f.write(message)
+                # Используем espeak для преобразования текста в речь
+                subprocess.run(["espeak", "-f", "/tmp/notification.txt", "-v", "ru"], check=False)
+            except Exception as inner_e:
+                print(f"Критическая ошибка при воспроизведении уведомления: {inner_e}")
+                
     def pause_recording(self):
         """
         Приостанавливает запись
@@ -241,98 +278,59 @@ class RecorderManager:
         Returns:
             str: Путь к сохраненному файлу или None в случае ошибки
         """
-        if not self.recorder.is_active():
-            if self.debug:
-                print("Невозможно остановить запись: запись не активна")
-            return None
-            
-        if self.debug:
-            print("\n>> ОСТАНОВКА ЗАПИСИ В RECORDER_MANAGER <<")
-        
-        # Сохраняем папку до остановки
-        folder = self.recorder.get_current_folder()
-        
-        # Проверяем, находится ли запись на паузе
-        was_paused = self.recorder.is_on_pause()
-        if was_paused and self.debug:
-            print("Запись была на паузе перед остановкой")
-        
         try:
-            # Останавливаем запись и получаем путь к файлу
-            if self.debug:
-                print("Вызов recorder.stop_recording()...")
-            file_path = self.recorder.stop_recording()
-            
-            if not file_path:
-                if self.debug:
-                    print("Ошибка: файл не был сохранен")
+            if not self.recorder.is_active():
+                print("Попытка остановить запись, но запись не активна")
                 return None
             
-            if self.debug:
-                print(f"Запись успешно сохранена в файл: {file_path}")
+            # Получаем текущую папку для записи
+            folder = self.recorder.get_current_folder()
             
-            # Воспроизводим звуковые уведомления напрямую через aplay
+            # Проигрываем звуковое уведомление о завершении записи
+            self.play_notification("Запись завершается")
+            
             try:
-                if self.debug:
-                    print("Воспроизведение звуковых уведомлений...")
-                
-                # Уведомление о том, что запись остановлена с блокирующим вызовом
-                print("Воспроизведение первого сообщения: 'Запись остановлена'")
-                
-                # Блокирующий вызов для первого сообщения
-                if hasattr(self.tts_manager, 'play_speech_blocking'):
-                    self.tts_manager.play_speech_blocking("Запись остановлена")
-                else:
-                    self.tts_manager.play_speech("Запись остановлена")
-                    # Даем время на проигрывание первого сообщения
-                    time.sleep(1.0)
-                
-                # Небольшая задержка между сообщениями для естественности
-                delay = 0.5
-                if self.debug:
-                    print(f"Небольшая пауза {delay} секунд между сообщениями...")
-                time.sleep(delay)
-                
-                # Озвучиваем сообщение о сохранении
-                saved_message = f"Запись сохранена в папку {folder}"
-                print(f"Воспроизведение второго сообщения: '{saved_message}'")
-                
-                # Блокирующий вызов для второго сообщения
-                if hasattr(self.tts_manager, 'play_speech_blocking'):
-                    self.tts_manager.play_speech_blocking(saved_message)
-                else:
-                    self.tts_manager.play_speech(saved_message)
-                    # Даем время для полного проигрывания второго сообщения
-                    time.sleep(1.5)
-                
-                # Минимальная задержка перед возвратом управления
-                time.sleep(0.5)
-                
-                if self.debug:
-                    print("Завершено воспроизведение всех сообщений")
-                    
+                # Используем звуковой сигнал с aplay
+                subprocess.run(["aplay", "/home/aleks/main-sounds/stop.wav"], check=False)
             except Exception as e:
-                if self.debug:
-                    print(f"Ошибка при воспроизведении уведомлений: {e}")
-                # Запасной вариант с увеличенными задержками
-                try:
-                    self.tts_manager.play_speech("Запись остановлена")
-                    time.sleep(2.5)  # Большая задержка для надежности
-                    self.tts_manager.play_speech(f"Запись сохранена в папку {folder}")
-                    time.sleep(3.0)  # Увеличенная задержка после второго сообщения
-                except:
-                    if self.debug:
-                        print("Критическая ошибка при воспроизведении резервных сообщений")
+                print(f"Ошибка при воспроизведении звукового сигнала остановки: {e}")
+                
+            # Останавливаем запись и получаем путь к сохраненному файлу
+            print("Останавливаем и сохраняем запись...")
+            file_path = self.recorder.stop_recording()
             
-            # Обратный вызов для обновления интерфейса
+            if file_path:
+                print(f"Запись успешно сохранена: {file_path}")
+                
+                try:
+                    # Используем звуковой сигнал для подтверждения сохранения
+                    subprocess.run(["aplay", "/home/aleks/main-sounds/saved.wav"], check=False)
+                except Exception as e:
+                    print(f"Ошибка при воспроизведении звукового сигнала сохранения: {e}")
+                
+                # Озвучиваем подтверждение сохранения
+                message = f"Запись сохранена в папке {folder}"
+                self.play_notification(message)
+                
+                # Обновляем интерфейс
+                if self.update_callback:
+                    self.update_callback()
+                
+                return file_path
+            else:
+                print("Ошибка: Не удалось сохранить запись")
+                self.play_notification("Ошибка при сохранении записи")
+                return None
+                
+        except Exception as e:
+            error_msg = f"Критическая ошибка при остановке записи: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            
+            # Пытаемся вернуть интерфейс в исходное состояние
             if self.update_callback:
                 self.update_callback()
                 
-            return file_path
-                
-        except Exception as e:
-            if self.debug:
-                print(f"КРИТИЧЕСКАЯ ОШИБКА при остановке записи: {e}")
             return None
     
     def cancel_recording(self):

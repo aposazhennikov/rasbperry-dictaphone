@@ -8,6 +8,16 @@ import argparse
 import glob
 import json
 
+# Интеграция с Sentry для отслеживания ошибок
+import sentry_sdk
+sentry_sdk.init(
+    dsn="https://990b663058427f36a87004fc14319c09@o4508953992101888.ingest.de.sentry.io/4508953994330192",
+    # Добавляем данные о пользователе и запросах
+    send_default_pii=True,
+    # Включаем отслеживание исключений в фоновых потоках
+    enable_tracing=True,
+)
+
 # Добавляем текущую директорию в путь поиска модулей
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
@@ -23,6 +33,7 @@ parser.add_argument('--voice', type=str, help='Идентификатор гол
 parser.add_argument('--tts-engine', type=str, choices=['gtts', 'google_cloud'], help='Движок для синтеза речи (gtts или google_cloud)')
 parser.add_argument('--google-cloud-credentials', type=str, help='Путь к файлу с учетными данными Google Cloud')
 parser.add_argument('--show-metrics', action='store_true', help='Показать подробную информацию об использовании Google Cloud API')
+parser.add_argument('--records-dir', type=str, default='/home/aleks/records', help='Директория для хранения записей диктофона')
 
 args = parser.parse_args()
 
@@ -32,7 +43,8 @@ if args.pre_generate or args.pre_generate_missing:
     from menu import MenuManager, SettingsManager
     
     # Создаем менеджеры
-    settings_manager = SettingsManager(settings_dir=args.cache_dir)
+    settings_file = os.path.join(args.cache_dir, "settings.json")
+    settings_manager = SettingsManager(settings_file=settings_file, debug=args.debug)
     
     # Если указан движок TTS, устанавливаем его
     if args.tts_engine:
@@ -63,7 +75,8 @@ if args.pre_generate or args.pre_generate_missing:
         cache_dir=args.cache_dir, 
         debug=args.debug,
         use_wav=not args.use_mp3,
-        settings_manager=settings_manager
+        settings_manager=settings_manager,
+        records_dir=args.records_dir
     )
     
     # Создаем структуру меню

@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-from .menu_item import MenuItem, SubMenu
-from .display_manager import DisplayManager
-from .tts_manager import TTSManager
-from .settings_manager import SettingsManager
-from .recorder_manager import RecorderManager
+import os
 import time
-import subprocess
+import sentry_sdk
+from pathlib import Path
+from .tts_manager import TTSManager
+from .display_manager import DisplayManager
+from .recorder_manager import RecorderManager
+from .playback_manager import PlaybackManager
+from .settings_manager import SettingsManager
+from .audio_recorder import AudioRecorder
+from .menu_item import MenuItem, SubMenu, Menu
 
 class MenuManager:
     """Класс для управления иерархическим меню"""
@@ -15,12 +19,12 @@ class MenuManager:
         Инициализация менеджера меню
         
         Args:
-            tts_enabled (bool): Включена ли озвучка
-            cache_dir (str): Директория для кэширования звуковых файлов
+            tts_enabled (bool): Включить озвучку
+            cache_dir (str): Директория для кэширования звуков
             debug (bool): Режим отладки
-            use_wav (bool): Использовать WAV вместо MP3 для более быстрого воспроизведения
-            settings_manager (SettingsManager): Менеджер настроек (если None, будет создан новый)
-            records_dir (str): Директория для сохранения аудиозаписей
+            use_wav (bool): Использовать WAV вместо MP3
+            settings_manager: Менеджер настроек
+            records_dir (str): Директория для записей
         """
         self.root_menu = None
         self.current_menu = None
@@ -31,27 +35,16 @@ class MenuManager:
         self.records_dir = records_dir
         
         # Инициализация менеджера настроек
-        if settings_manager:
-            self.settings_manager = settings_manager
-        else:
-            self.settings_manager = SettingsManager(settings_dir=cache_dir)
+        self.settings_manager = settings_manager
         
-        # Инициализация менеджеров
-        self.display_manager = DisplayManager(self)
-        
-        # Инициализация менеджера TTS с голосом из настроек
-        if self.tts_enabled:
-            voice = self.settings_manager.get_voice()
+        # Инициализация менеджера синтеза речи
+        if tts_enabled:
             self.tts_manager = TTSManager(
-                cache_dir=cache_dir, 
-                debug=debug, 
+                cache_dir=cache_dir,
+                debug=debug,
                 use_wav=use_wav,
-                voice=voice,
-                settings_manager=self.settings_manager
+                settings_manager=settings_manager
             )
-            if self.debug:
-                print(f"TTS менеджер инициализирован с голосом {voice}")
-                print(f"TTS движок: {self.settings_manager.get_tts_engine()}")
         else:
             self.tts_manager = None
         
@@ -62,17 +55,42 @@ class MenuManager:
             debug=self.debug
         )
         
+        # Инициализация менеджера воспроизведения
+        self.playback_manager = PlaybackManager(
+            tts_manager=self.tts_manager,
+            base_dir=self.records_dir,
+            debug=self.debug
+        )
+        
         # Состояние записи
         self.recording_state = {
             "active": False,
             "paused": False,
             "folder": None,
-            "time": 0,
-            "time_formatted": "00:00"
+            "elapsed_time": 0,
+            "formatted_time": "00:00",
+            "max_duration_handled": False
+        }
+        
+        # Состояние воспроизведения
+        self.playback_state = {
+            "active": False,
+            "paused": False,
+            "folder": None,
+            "current_file": None,
+            "position": "00:00",
+            "duration": "00:00",
+            "progress": 0
         }
         
         # Регистрируем обратный вызов для обновления информации о записи
         self.recorder_manager.set_update_callback(self._update_recording_info)
+        
+        # Регистрируем обратный вызов для обновления информации о воспроизведении
+        self.playback_manager.set_update_callback(self._update_playback_info)
+        
+        # Инициализация менеджера отображения
+        self.display_manager = DisplayManager(self)
     
     def set_root_menu(self, menu):
         """
@@ -86,15 +104,16 @@ class MenuManager:
     
     def display_current_menu(self):
         """Отображает текущее меню"""
-        self.display_manager.display_menu()
-        
-        # Озвучиваем название текущего меню
-        if self.tts_enabled and self.current_menu:
-            # Получаем текущий голос из настроек
-            voice = self.settings_manager.get_voice()
+        if self.current_menu:
+            self.display_manager.display_menu(self.current_menu)
             
-            # Название меню всегда озвучиваем текущим голосом
-            self.tts_manager.play_speech(f"Меню {self.current_menu.name}", voice=voice)
+            # Озвучиваем название текущего меню
+            if self.tts_enabled:
+                # Получаем текущий голос из настроек
+                voice = self.settings_manager.get_voice()
+                
+                # Название меню всегда озвучиваем текущим голосом
+                self.tts_manager.play_speech(f"Меню {self.current_menu.name}", voice_id=voice)
     
     def move_up(self):
         """Перемещение вверх по текущему меню"""
@@ -501,68 +520,121 @@ class MenuManager:
         return debug_info
 
     def _update_recording_info(self):
-        """Обновляет информацию о текущей записи"""
-        if self.recorder_manager.is_recording():
-            self.recording_state["active"] = True
-            self.recording_state["paused"] = self.recorder_manager.is_paused()
-            self.recording_state["folder"] = self.recorder_manager.get_current_folder()
-            self.recording_state["time"] = self.recorder_manager.get_current_time()
-            self.recording_state["time_formatted"] = self.recorder_manager.get_formatted_time()
+        """Обновляет информацию о записи"""
+        try:
+            if not self.recorder_manager or not self.display_manager:
+                return
             
-            # Всегда обновляем экран записи, если запись активна
-            self.display_manager.display_recording_screen(
-                status="Paused" if self.recording_state["paused"] else "Recording",
-                time=self.recording_state["time_formatted"],
-                folder=self.recording_state["folder"]
+            # Получаем текущий статус записи
+            is_recording = self.recorder_manager.is_recording()
+            is_paused = self.recorder_manager.is_paused()
+            
+            # Обновляем состояние записи
+            self.recording_state["active"] = is_recording
+            self.recording_state["paused"] = is_paused
+            
+            if is_recording:
+                # Получаем текущую папку
+                self.recording_state["folder"] = self.recorder_manager.get_current_folder()
+                
+                # Получаем текущее время записи
+                current_time = self.recorder_manager.get_current_time()
+                formatted_time = self.recorder_manager.get_formatted_time()
+                
+                self.recording_state["elapsed_time"] = current_time
+                self.recording_state["formatted_time"] = formatted_time
+                
+                # Проверяем, не достигнут ли максимальный порог записи
+                if current_time >= AudioRecorder.MAX_RECORDING_DURATION:
+                    self._handle_max_duration_reached()
+                
+                # Отображаем экран записи
+                status = "Paused" if is_paused else "Recording"
+                self.display_manager.display_recording_screen(
+                    status=status,
+                    time=formatted_time,
+                    folder=self.recording_state["folder"]
+                )
+        except Exception as e:
+            error_msg = f"Ошибка при обновлении информации о записи: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+    
+    def _handle_max_duration_reached(self):
+        """Обрабатывает ситуацию, когда достигнут максимальный порог записи"""
+        try:
+            if self.recording_state["max_duration_handled"]:
+                return  # Уже обработано
+                
+            print("Достигнут максимальный порог записи (3 часа)")
+            self.recording_state["max_duration_handled"] = True
+            
+            # Останавливаем запись
+            self._stop_recording()
+            
+            # Отображаем сообщение
+            self.display_manager.display_message(
+                message="Достигнут максимальный порог записи 3 часа. Запись автоматически завершена.",
+                title="Автоматическая остановка"
             )
             
-            if self.debug:
-                print(f"Обновление информации о записи: активна={self.recording_state['active']}, " +
-                      f"пауза={self.recording_state['paused']}, " +
-                      f"время={self.recording_state['time_formatted']}, " +
-                      f"папка={self.recording_state['folder']}")
-        else:
-            # Сбрасываем состояние записи, если запись неактивна
-            old_state = self.recording_state.get("active", False)
-            self.recording_state["active"] = False
-            self.recording_state["paused"] = False
+            # Задержка, чтобы пользователь успел прочитать сообщение
+            time.sleep(3)
             
-            # Если запись была активна, но теперь неактивна, выводим информацию
-            if old_state and self.debug:
-                print("Запись остановлена, сбрасываем состояние")
+            # Возвращаемся к основному меню
+            if self.current_menu and self.current_menu.parent:
+                self.current_menu = self.current_menu.parent
+                self.display_current_menu()
+                
+        except Exception as e:
+            error_msg = f"Ошибка при обработке превышения длительности записи: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
     
     def _start_recording(self, folder):
         """
         Начинает запись в указанную папку
         
         Args:
-            folder (str): Папка для записи ('A', 'B' или 'C')
+            folder (str): Папка для записи (A, B или C)
         """
-        # Показываем экран записи сразу, чтобы пользователь понимал что происходит
-        self.display_manager.display_recording_screen(
-            status="Initializing...",
-            time="00:00",
-            folder=folder
-        )
-        
-        # Начинаем запись
-        print(f"Начинаем запись в папку {folder}...")
-        success = self.recorder_manager.start_recording(folder)
-        
-        if success:
-            # Обновляем состояние записи
-            self.recording_state["active"] = True
-            self.recording_state["paused"] = False
-            self.recording_state["folder"] = folder
+        try:
+            print(f"\n*** НАЧАЛО ЗАПИСИ В ПАПКУ {folder} ***")
             
-            # Обновляем экран записи
-            self._update_recording_info()
-        else:
-            print("Не удалось начать запись!")
-            # Возвращаемся в предыдущее меню в случае неудачи
-            if self.current_menu.parent:
-                self.current_menu = self.current_menu.parent
+            # Сбрасываем состояние записи
+            self.recording_state = {
+                "active": False,
+                "paused": False,
+                "folder": folder,
+                "elapsed_time": 0,
+                "formatted_time": "00:00",
+                "max_duration_handled": False
+            }
+            
+            # Начинаем запись
+            if self.recorder_manager.start_recording(folder):
+                print("Запись успешно начата")
+                
+                # Отображаем экран записи
+                self.display_manager.display_recording_screen(
+                    status="Recording",
+                    time="00:00",
+                    folder=folder
+                )
+                
+                # Обновляем состояние записи
+                self.recording_state["active"] = True
+            else:
+                print("Ошибка при начале записи")
+                # Возвращаемся в меню выбора папки
                 self.display_current_menu()
+        except Exception as e:
+            error_msg = f"Ошибка при начале записи: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            
+            # Возвращаемся в меню выбора папки
+            self.display_current_menu()
     
     def _toggle_pause_recording(self):
         """Переключает паузу записи"""
@@ -672,9 +744,219 @@ class MenuManager:
         pass
 
     def _show_play_record_menu(self):
-        # Implementation of _show_play_record_menu method
-        pass
-
+        """Показывает меню воспроизведения записей"""
+        # Создаем временное подменю для выбора папки
+        play_menu = SubMenu("Выберите папку для воспроизведения", parent=self.current_menu)
+        
+        # Добавляем пункты меню для папок
+        play_menu.add_item(MenuItem("Папка A", action=lambda: self._show_play_files_menu("A")))
+        play_menu.add_item(MenuItem("Папка B", action=lambda: self._show_play_files_menu("B")))
+        play_menu.add_item(MenuItem("Папка C", action=lambda: self._show_play_files_menu("C")))
+        
+        # Переключаемся на меню выбора папки
+        self.current_menu = play_menu
+        self.display_current_menu()
+    
     def _show_delete_record_menu(self):
         # Implementation of _show_delete_record_menu method
         pass
+
+    def _update_playback_info(self):
+        """Обновляет информацию о текущем воспроизведении"""
+        # Получаем информацию о воспроизведении
+        player_info = self.playback_manager.playback_info
+        
+        # Обновляем состояние воспроизведения
+        self.playback_state["active"] = player_info["active"]
+        self.playback_state["paused"] = player_info["paused"]
+        self.playback_state["position"] = player_info["position"]
+        self.playback_state["duration"] = player_info["duration"]
+        self.playback_state["progress"] = player_info["progress"]
+        
+        # Получаем информацию о текущем файле
+        file_info = self.playback_manager.get_current_file_info()
+        if file_info:
+            self.playback_state["current_file"] = file_info["description"]
+            self.playback_state["folder"] = file_info["folder"]
+        
+        # Обновляем экран воспроизведения, если воспроизведение активно
+        if self.playback_state["active"]:
+            status = "Paused" if self.playback_state["paused"] else "Playing"
+            self.display_manager.display_playback_screen(
+                status=status,
+                time=f"{self.playback_state['position']} / {self.playback_state['duration']}",
+                progress=self.playback_state["progress"],
+                file_name=self.playback_state["current_file"],
+                folder=self.playback_state["folder"]
+            )
+            
+            if self.debug:
+                print(f"Обновление информации о воспроизведении: " +
+                      f"активно={self.playback_state['active']}, " +
+                      f"пауза={self.playback_state['paused']}, " +
+                      f"время={self.playback_state['position']} / {self.playback_state['duration']}, " +
+                      f"файл={self.playback_state['current_file']}")
+    
+    def _show_play_files_menu(self, folder):
+        """
+        Показывает меню выбора файла для воспроизведения
+        
+        Args:
+            folder (str): Папка с записями ('A', 'B' или 'C')
+        """
+        # Загружаем список файлов из выбранной папки
+        if not self.playback_manager.load_folder(folder, return_to_menu=self.current_menu):
+            # Если в папке нет файлов, сообщаем об этом
+            self.tts_manager.play_speech(f"В папке {folder} нет записей")
+            return
+        
+        # Создаем временное подменю для выбора файла
+        files_menu = SubMenu(f"Записи в папке {folder}", parent=self.current_menu)
+        
+        # Получаем количество файлов
+        files_count = self.playback_manager.get_files_count()
+        
+        # Добавляем пункты меню для каждого файла
+        for i in range(files_count):
+            # Переходим к файлу с индексом i
+            self.playback_manager.current_index = i
+            
+            # Получаем информацию о файле
+            file_info = self.playback_manager.get_current_file_info()
+            if file_info:
+                # Добавляем пункт меню для файла
+                files_menu.add_item(MenuItem(
+                    file_info["description"],
+                    action=lambda idx=i: self._play_file(idx)
+                ))
+        
+        # Переключаемся на меню выбора файла
+        self.current_menu = files_menu
+        self.display_current_menu()
+    
+    def _play_file(self, file_index):
+        """
+        Начинает воспроизведение выбранного файла
+        
+        Args:
+            file_index (int): Индекс файла в списке
+        """
+        # Устанавливаем текущий индекс
+        self.playback_manager.current_index = file_index
+        
+        # Начинаем воспроизведение
+        self.playback_manager.play_current_file()
+    
+    def _toggle_pause_playback(self):
+        """Переключает паузу воспроизведения"""
+        if not self.playback_state["active"]:
+            if self.debug:
+                print("Попытка поставить на паузу, но воспроизведение не активно")
+            return
+        
+        try:
+            if self.debug:
+                print(f"Переключаем паузу воспроизведения. Текущее состояние: {self.playback_state['paused']}")
+            
+            # Переключаем паузу
+            self.playback_manager.toggle_pause()
+            
+            # Отображаем текущий статус воспроизведения
+            if self.debug:
+                print(f"Статус воспроизведения: активно={self.playback_state['active']}, " +
+                      f"на паузе={self.playback_state['paused']}, " +
+                      f"время={self.playback_state['position']} / {self.playback_state['duration']}")
+                
+        except Exception as e:
+            if self.debug:
+                print(f"КРИТИЧЕСКАЯ ОШИБКА при переключении паузы воспроизведения: {e}")
+    
+    def _stop_playback(self):
+        """Останавливает воспроизведение и возвращается в меню"""
+        if not self.playback_state["active"]:
+            if self.debug:
+                print("Попытка остановить воспроизведение, но оно не активно")
+            return
+        
+        try:
+            if self.debug:
+                print("\n*** ОСТАНОВКА ВОСПРОИЗВЕДЕНИЯ ***")
+            
+            # Останавливаем воспроизведение
+            self.playback_manager.stop_playback()
+            
+            # Возвращаемся в родительское меню
+            return_menu = self.playback_manager.get_return_menu()
+            if return_menu:
+                if self.debug:
+                    print(f"Возвращаемся в меню: {return_menu.name}")
+                self.current_menu = return_menu
+                self.display_current_menu()
+            else:
+                # Если нет родительского меню, возвращаемся в корневое
+                if self.debug:
+                    print("Возвращаемся в корневое меню")
+                self.current_menu = self.root_menu
+                self.display_current_menu()
+                
+        except Exception as e:
+            if self.debug:
+                print(f"КРИТИЧЕСКАЯ ОШИБКА при остановке воспроизведения: {e}")
+            
+            # В случае ошибки тоже возвращаемся в родительское меню
+            return_menu = self.playback_manager.get_return_menu()
+            if return_menu:
+                self.current_menu = return_menu
+                self.display_current_menu()
+    
+    def _delete_current_file(self):
+        """Удаляет текущий воспроизводимый файл"""
+        if not self.playback_state["active"]:
+            if self.debug:
+                print("Попытка удалить файл, но воспроизведение не активно")
+            return
+        
+        # Инициируем процесс удаления
+        self.playback_manager.delete_current_file()
+    
+    def _confirm_delete(self, confirmed):
+        """
+        Подтверждает или отменяет удаление файла
+        
+        Args:
+            confirmed (bool): True для подтверждения, False для отмены
+        """
+        if not self.playback_manager.is_delete_confirmation_active():
+            return
+        
+        # Подтверждаем или отменяем удаление
+        self.playback_manager.confirm_delete(confirmed)
+    
+    def _next_file(self):
+        """Переходит к следующему файлу в списке"""
+        if not self.playback_state["active"]:
+            return
+        
+        # Переходим к следующему файлу
+        self.playback_manager.move_to_next_file()
+    
+    def _prev_file(self):
+        """Переходит к предыдущему файлу в списке"""
+        if not self.playback_state["active"]:
+            return
+        
+        # Переходим к предыдущему файлу
+        self.playback_manager.move_to_prev_file()
+    
+    def _adjust_volume(self, delta):
+        """
+        Изменяет громкость воспроизведения
+        
+        Args:
+            delta (int): Изменение громкости (-/+)
+        """
+        if not self.playback_state["active"]:
+            return
+        
+        # Изменяем громкость
+        self.playback_manager.adjust_volume(delta)

@@ -1,134 +1,261 @@
 #!/usr/bin/env python3
 import os
 import sys
+import time
+import subprocess
+import sentry_sdk
 
 class DisplayManager:
-    """Класс для отображения меню на экране"""
+    """
+    Класс для управления отображением информации на экране.
+    Поддерживает различные экраны: меню, запись, воспроизведение.
+    """
     
     def __init__(self, menu_manager):
         """
         Инициализация менеджера отображения
         
         Args:
-            menu_manager: Менеджер меню
+            menu_manager: Менеджер меню для доступа к данным
         """
-        self.menu_manager = menu_manager
-        self.current_screen = "menu"  # Текущий отображаемый экран (menu, recording, etc.)
+        try:
+            self.menu_manager = menu_manager
+            self.debug = menu_manager.debug
+            
+            # Текущий экран (menu, recording, playback, delete_confirmation)
+            self.current_screen = "menu"
+            
+            # Размеры экрана
+            self.screen_width = 80
+            self.screen_height = 24
+            
+            if self.debug:
+                print("DisplayManager инициализирован")
+        except Exception as e:
+            error_msg = f"Ошибка при инициализации DisplayManager: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
     
     def clear_screen(self):
         """Очищает экран"""
-        os.system('cls' if os.name == 'nt' else 'clear')
+        try:
+            os.system('cls' if os.name == 'nt' else 'clear')
+        except Exception as e:
+            error_msg = f"Ошибка при очистке экрана: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
     
-    def display_menu(self):
-        """Отображает текущее меню"""
-        self.clear_screen()
-        
-        current_menu = self.menu_manager.current_menu
-        if not current_menu:
-            return
-            
-        # Отображаем заголовок меню
-        print(f"=== {current_menu.name} ===\n")
-        
-        # Отображаем пункты меню
-        for i, item in enumerate(current_menu.items):
-            # Добавляем маркер для текущего выбранного пункта
-            prefix = "> " if i == current_menu.current_selection else "  "
-            print(f"{prefix}{item.name}")
-            
-        # Добавляем подсказку для навигации
-        print("\n--- Навигация ---")
-        print("↑/↓: Перемещение по меню")
-        print("Enter: Выбор")
-        print("Back: Возврат в предыдущее меню")
-        
-        # Если включен режим отладки, выводим отладочную информацию
-        if self.menu_manager.debug:
-            self.display_debug_info()
-    
-    def display_message(self, message, title=None):
+    def display_menu(self, menu):
         """
-        Отображает сообщение
+        Отображает меню
+        
+        Args:
+            menu: Объект меню для отображения
+        """
+        try:
+            self.current_screen = "menu"
+            self.clear_screen()
+            
+            # Заголовок
+            print("=" * self.screen_width)
+            print(menu.name.center(self.screen_width))
+            print("=" * self.screen_width + "\n")
+            
+            # Проверяем, есть ли элементы в меню
+            if not menu.items:
+                print("Меню пусто".center(self.screen_width))
+                return
+            
+            # Отображаем элементы меню
+            for i, item in enumerate(menu.items):
+                prefix = "→ " if i == menu.current_selection else "  "
+                print(f"{prefix}{item.name}")
+            
+            # Добавляем пустое пространство до нижней части экрана
+            visible_items = len(menu.items)
+            for _ in range(max(0, self.screen_height - visible_items - 7)):
+                print()
+            
+            # Нижняя часть экрана
+            print("\n" + "=" * self.screen_width)
+            print("Навигация: UP/DOWN - перемещение, SELECT - выбор, BACK - возврат")
+            print("=" * self.screen_width)
+        except Exception as e:
+            error_msg = f"Ошибка при отображении меню: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+    
+    def display_recording_screen(self, status, time, folder):
+        """
+        Отображает экран записи
+        
+        Args:
+            status (str): Статус записи ("Recording" или "Paused")
+            time (str): Текущее время записи
+            folder (str): Папка для сохранения
+        """
+        try:
+            self.current_screen = "recording"
+            self.clear_screen()
+            
+            # Заголовок
+            print("=" * self.screen_width)
+            print("РЕЖИМ ЗАПИСИ".center(self.screen_width))
+            print("=" * self.screen_width)
+            
+            # Статус записи
+            status_text = "ЗАПИСЬ" if status == "Recording" else "ПАУЗА"
+            print(f"\nСтатус: {status_text}")
+            print(f"Время записи: {time}")
+            print(f"Папка: {folder}")
+            
+            # Инструкции
+            print("\n" + "=" * self.screen_width)
+            print("SELECT - пауза/возобновление, BACK - остановка и сохранение")
+            print("=" * self.screen_width)
+        except Exception as e:
+            error_msg = f"Ошибка при отображении экрана записи: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+    
+    def display_playback_screen(self, status, time, progress, file_name, folder):
+        """
+        Отображает экран воспроизведения
+        
+        Args:
+            status (str): Статус воспроизведения ("Playing" или "Paused")
+            time (str): Текущее время/общая длительность
+            progress (int): Прогресс воспроизведения (0-100)
+            file_name (str): Имя файла
+            folder (str): Папка с файлами
+        """
+        try:
+            self.current_screen = "playback"
+            self.clear_screen()
+            
+            # Заголовок
+            print("=" * self.screen_width)
+            print("ВОСПРОИЗВЕДЕНИЕ ЗАПИСИ".center(self.screen_width))
+            print("=" * self.screen_width)
+            
+            # Информация о файле
+            print(f"\nФайл: {file_name}")
+            print(f"Папка: {folder}")
+            
+            # Статус и время
+            status_text = "ВОСПРОИЗВЕДЕНИЕ" if status == "Playing" else "ПАУЗА"
+            print(f"\nСтатус: {status_text}")
+            print(f"Время: {time}")
+            
+            # Прогресс-бар
+            bar_width = 50
+            filled_width = int(bar_width * progress / 100)
+            bar = "▓" * filled_width + "░" * (bar_width - filled_width)
+            print(f"\n[{bar}] {progress}%")
+            
+            # Инструкции
+            print("\n" + "=" * self.screen_width)
+            print("SELECT - пауза/возобновление, BACK - остановка")
+            print("UP/DOWN - громкость, LEFT(удерж) - перемотка, RIGHT(удерж) - ускорение")
+            print("PAGE UP/DOWN - пред./след. запись, POWER - удалить запись")
+            print("=" * self.screen_width)
+        except Exception as e:
+            error_msg = f"Ошибка при отображении экрана воспроизведения: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+    
+    def display_delete_confirmation(self, file_name, selected_option="Нет"):
+        """
+        Отображает экран подтверждения удаления
+        
+        Args:
+            file_name (str): Имя файла для удаления
+            selected_option (str): Выбранный вариант ("Да" или "Нет")
+        """
+        try:
+            self.current_screen = "delete_confirmation"
+            self.clear_screen()
+            
+            # Заголовок
+            print("=" * self.screen_width)
+            print("ПОДТВЕРЖДЕНИЕ УДАЛЕНИЯ".center(self.screen_width))
+            print("=" * self.screen_width)
+            
+            # Информация о файле
+            print(f"\nВы уверены, что хотите удалить файл:")
+            print(f"\n{file_name}")
+            
+            # Варианты выбора
+            print("\nВыберите действие:")
+            yes_prefix = "→ " if selected_option == "Да" else "  "
+            no_prefix = "→ " if selected_option == "Нет" else "  "
+            
+            print(f"{yes_prefix}Да - удалить файл")
+            print(f"{no_prefix}Нет - отменить удаление")
+            
+            # Инструкции
+            print("\n" + "=" * self.screen_width)
+            print("UP/DOWN - выбор, SELECT - подтвердить, BACK - отменить")
+            print("=" * self.screen_width)
+        except Exception as e:
+            error_msg = f"Ошибка при отображении экрана подтверждения удаления: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+    
+    def display_message(self, message, title="Сообщение"):
+        """
+        Отображает информационное сообщение
         
         Args:
             message (str): Текст сообщения
-            title (str, optional): Заголовок сообщения
+            title (str): Заголовок сообщения
         """
-        self.clear_screen()
-        
-        if title:
-            print(f"=== {title} ===\n")
+        try:
+            self.clear_screen()
             
-        print(message)
-        print("\nНажмите любую клавишу для продолжения...")
-        
-        # Если включен режим отладки, выводим отладочную информацию
-        if self.menu_manager.debug:
-            self.display_debug_info()
+            # Заголовок
+            print("=" * self.screen_width)
+            print(title.center(self.screen_width))
+            print("=" * self.screen_width)
             
+            # Содержимое сообщения
+            print(f"\n{message}\n")
+            
+            # Инструкции
+            print("\n" + "=" * self.screen_width)
+            print("Нажмите любую клавишу для продолжения...")
+            print("=" * self.screen_width)
+        except Exception as e:
+            error_msg = f"Ошибка при отображении сообщения: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+    
     def display_debug_info(self):
         """Отображает отладочную информацию"""
         try:
+            # Сохраняем текущий экран
+            previous_screen = self.current_screen
+            
+            self.clear_screen()
+            
+            # Заголовок
+            print("=" * self.screen_width)
+            print("ОТЛАДОЧНАЯ ИНФОРМАЦИЯ".center(self.screen_width))
+            print("=" * self.screen_width + "\n")
+            
+            # Получаем отладочную информацию из меню
             debug_info = self.menu_manager.get_debug_info()
             
-            print("\n\n=== ОТЛАДОЧНАЯ ИНФОРМАЦИЯ ===")
-            print(f"Текущее меню: {debug_info.get('current_menu', 'Неизвестно')}")
+            # Выводим информацию
+            for key, value in debug_info.items():
+                print(f"{key}: {value}")
             
-            # Здесь может быть проблема, т.к. tts_enabled могло быть удалено
-            if 'tts_enabled' in debug_info:
-                print(f"Озвучка включена: {debug_info['tts_enabled']}")
+            print("\n" + "=" * self.screen_width)
+            print("Нажмите любую клавишу для возврата...")
             
-            # Если есть статистика TTS
-            if 'tts' in debug_info and debug_info['tts']:
-                tts_stats = debug_info['tts']
-                print("\n--- Статистика TTS ---")
-                print(f"Всего запросов: {tts_stats.get('total_requests', 'н/д')}")
-                print(f"Запросов сегодня: {tts_stats.get('today_requests', 'н/д')}")
-                print(f"Примерно осталось запросов: {tts_stats.get('remaining_free_requests', 'н/д')}")
-                print(f"Использований кэша: {tts_stats.get('cached_used', 'н/д')}")
-                print(f"Текущий голос: {tts_stats.get('current_voice', 'н/д')}")
-                print(f"Движок TTS: {tts_stats.get('tts_engine', 'н/д')}")
-                
-            # Если есть метрики Google Cloud TTS
-            if 'google_cloud_tts' in debug_info:
-                gc_metrics = debug_info['google_cloud_tts']
-                print("\n--- Метрики Google Cloud TTS ---")
-                for key, value in gc_metrics.items():
-                    print(f"{key}: {value}")
+            # Восстанавливаем предыдущий экран
+            self.current_screen = previous_screen
         except Exception as e:
-            print("\n=== Ошибка отладочной информации ===")
-            print(f"Не удалось показать отладочную информацию: {e}")
-        
-        print("\n=============================\n")
-
-    def display_recording_screen(self, status, time, folder=None):
-        """
-        Отображает экран записи с текущим статусом и временем
-        
-        Args:
-            status (str): Статус записи ('Recording' или 'Paused')
-            time (str): Текущее время записи в формате MM:SS
-            folder (str, optional): Папка для сохранения записи
-        """
-        self.clear_screen()
-        self.current_screen = "recording"
-        
-        # Отображаем заголовок
-        print("=== Запись аудио ===\n")
-        
-        # Отображаем статус и время
-        status_text = "Запись" if status == "Recording" else "Пауза"
-        print(f"Статус: {status_text}")
-        print(f"Время: {time}")
-        
-        if folder:
-            print(f"Папка: {folder}")
-        
-        # Отображаем доступные команды
-        print("\n--- Команды ---")
-        print("SELECT: Пауза/Возобновить")
-        print("BACK: Стоп, сохранение и возврат в меню")
-        
-        # Если включен режим отладки, выводим отладочную информацию
-        if self.menu_manager.debug:
-            self.display_debug_info() 
+            error_msg = f"Ошибка при отображении отладочной информации: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e) 

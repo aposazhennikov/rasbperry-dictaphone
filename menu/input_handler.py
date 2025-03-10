@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import time
 from evdev import InputDevice, ecodes, list_devices
+import sentry_sdk
 
 # Константы клавиш
 KEY_UP = 103
@@ -9,6 +10,9 @@ KEY_SELECT = 353
 KEY_BACK = 158
 KEY_LEFT = 105
 KEY_RIGHT = 106
+KEY_POWER = 116   # Клавиша питания для удаления файлов
+KEY_PAGEUP = 104  # Клавиша Page Up для перехода к предыдущему файлу
+KEY_PAGEDOWN = 109  # Клавиша Page Down для перехода к следующему файлу
 
 class InputHandler:
     """Класс для обработки ввода с пульта"""
@@ -18,98 +22,137 @@ class InputHandler:
         Инициализация обработчика ввода
         
         Args:
-            menu_manager: Менеджер меню
-            target_device_name (str): Название устройства для поиска
+            menu_manager: Менеджер меню для обработки команд
+            target_device_name (str): Название целевого устройства ввода
         """
-        self.menu_manager = menu_manager
-        self.target_device_name = target_device_name
-        self.device = None
-        self.key_states = {
-            KEY_RIGHT: False,
-            KEY_LEFT: False
-        }
-        self.debounce_time = 0.1
-        self.last_key_time = 0
+        try:
+            self.menu_manager = menu_manager
+            self.target_device_name = target_device_name
+            self.device = None
+            self.running = False
+            self.debug = menu_manager.debug
+            
+            # Состояние клавиш для отслеживания удержания
+            self.key_states = {
+                KEY_LEFT: {"pressed": False, "time": 0},
+                KEY_RIGHT: {"pressed": False, "time": 0}
+            }
+            
+            if self.debug:
+                print("InputHandler инициализирован")
+        except Exception as e:
+            error_msg = f"Ошибка при инициализации InputHandler: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
     
     def find_device(self):
-        """Поиск устройства ввода по имени"""
-        devices = [InputDevice(path) for path in list_devices()]
-        for device in devices:
-            if self.target_device_name in device.name:
-                return device
-        return None
+        """
+        Ищет целевое устройство ввода по имени
+        
+        Returns:
+            InputDevice: Найденное устройство или None
+        """
+        try:
+            devices = [InputDevice(path) for path in list_devices()]
+            for device in devices:
+                if self.target_device_name in device.name:
+                    if self.debug:
+                        print(f"Найдено устройство: {device.name} ({device.path})")
+                    return device
+            
+            if self.debug:
+                print(f"Устройство {self.target_device_name} не найдено")
+                available_devices = ", ".join([device.name for device in devices])
+                print(f"Доступные устройства: {available_devices}")
+                
+            return None
+        except Exception as e:
+            error_msg = f"Ошибка при поиске устройства ввода: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return None
     
     def initialize(self):
-        """Инициализация устройства ввода"""
-        self.device = self.find_device()
-        if not self.device:
-            print(f"Устройство '{self.target_device_name}' не найдено!")
-            print("Доступные устройства:")
-            for device in [InputDevice(path) for path in list_devices()]:
-                print(f"  - {device.name}")
-            return False
+        """
+        Инициализирует устройство ввода
         
-        print(f"Устройство '{self.target_device_name}' найдено!")
-        return True
-        
-    def start_input_loop(self):
-        """Запускает цикл обработки ввода"""
-        if not self.device:
-            if not self.initialize():
-                return
-        
+        Returns:
+            bool: True, если инициализация успешна
+        """
         try:
+            self.device = self.find_device()
+            if not self.device:
+                return False
+                
+            if self.debug:
+                print("Устройство ввода инициализировано")
+                
+            return True
+        except Exception as e:
+            error_msg = f"Ошибка при инициализации устройства ввода: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return False
+            
+    def start_input_loop(self):
+        """Запускает цикл обработки событий ввода"""
+        try:
+            if not self.device:
+                if not self.initialize():
+                    print("Не удалось инициализировать устройство ввода")
+                    return
+            
+            self.running = True
+            
+            if self.debug:
+                print("Запущен цикл обработки ввода")
+            
             for event in self.device.read_loop():
+                if not self.running:
+                    break
+                    
                 if event.type == ecodes.EV_KEY:
                     self.process_key_event(event)
-        except KeyboardInterrupt:
-            print("\nЗавершение работы...")
         except Exception as e:
-            print(f"Ошибка при чтении ввода: {e}")
+            error_msg = f"Ошибка в цикле обработки ввода: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
             
     def process_key_event(self, event):
         """
-        Обработка события клавиши
+        Обрабатывает событие клавиши
         
         Args:
-            event: Событие от устройства ввода
+            event: Событие ввода
         """
-        # Предотвращаем дребезг клавиш
-        current_time = time.time()
-        if current_time - self.last_key_time < self.debounce_time:
-            return
-        self.last_key_time = current_time
-        
-        key_code = event.code
-        key_value = event.value  # 1 - нажата, 0 - отпущена
-        
-        # Добавляем отладочный вывод для диагностики
-        if key_value == 1:
-            print(f"\n*** Нажата клавиша {key_code} ***")
+        try:
+            # 1 - нажатие, 0 - отпускание
+            key_code = event.code
+            key_state = event.value
             
-            # Специальная обработка KEY_BACK для остановки записи
-            if key_code == KEY_BACK:
-                is_recording = self.menu_manager.recording_state.get("active", False)
-                print(f"KEY_BACK: запись активна: {is_recording}")
-                if is_recording:
-                    print("ВЫПОЛНЯЕМ КОМАНДУ ОСТАНОВКИ ЗАПИСИ")
-                    self.menu_manager._stop_recording()
-                    return
-        
-        # Получаем текущий экран из display_manager
-        current_screen = self.menu_manager.display_manager.current_screen
-        
-        # Обрабатываем нажатие клавиш
-        if key_value == 1:  # Клавиша нажата
-            # Проверяем, активна ли запись, независимо от текущего экрана
-            if self.menu_manager.recording_state.get("active", False):
-                print(f"Запись активна, обрабатываем команды для записи...")
-                if key_code == KEY_SELECT:  # KEY_SELECT - Пауза/Возобновить
-                    print("Выполняем _toggle_pause_recording")
-                    self.menu_manager._toggle_pause_recording()
-                    return
+            if self.debug:
+                action = "нажата" if key_state == 1 else "отпущена" if key_state == 0 else "удерживается"
+                print(f"Клавиша {key_code} {action}")
             
-            # Стандартная обработка для экрана меню, если не в режиме записи
+            # Обработка нажатий клавиш
+            if key_state == 1:  # Нажатие
+                self._handle_key_press(key_code)
+            elif key_state == 0:  # Отпускание
+                self._handle_key_release(key_code)
+        except Exception as e:
+            error_msg = f"Ошибка при обработке события клавиши: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            
+    def _handle_key_press(self, key_code):
+        """Обрабатывает нажатие клавиши"""
+        try:
+            # Обработка нажатий для режима воспроизведения
+            playback_manager = getattr(self.menu_manager, 'playback_manager', None)
+            if playback_manager and playback_manager.is_playing():
+                playback_manager.handle_key_press(key_code, True)
+                
+            # Обработка нажатий для основного меню
             if key_code == KEY_UP:
                 self.menu_manager.move_up()
             elif key_code == KEY_DOWN:
@@ -118,4 +161,28 @@ class InputHandler:
                 self.menu_manager.select_current_item()
             elif key_code == KEY_BACK:
                 self.menu_manager.go_back()
-            # Дополнительные клавиши можно добавить по необходимости
+                
+            # Запоминаем состояние и время для клавиш, которые можно удерживать
+            if key_code in self.key_states:
+                self.key_states[key_code]["pressed"] = True
+                self.key_states[key_code]["time"] = time.time()
+        except Exception as e:
+            error_msg = f"Ошибка при обработке нажатия клавиши: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            
+    def _handle_key_release(self, key_code):
+        """Обрабатывает отпускание клавиши"""
+        try:
+            # Обработка отпускания для режима воспроизведения
+            playback_manager = getattr(self.menu_manager, 'playback_manager', None)
+            if playback_manager and playback_manager.is_playing():
+                playback_manager.handle_key_press(key_code, False)
+                
+            # Сбрасываем состояние клавиш
+            if key_code in self.key_states:
+                self.key_states[key_code]["pressed"] = False
+        except Exception as e:
+            error_msg = f"Ошибка при обработке отпускания клавиши: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)

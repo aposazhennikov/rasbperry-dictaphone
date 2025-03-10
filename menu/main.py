@@ -9,6 +9,8 @@ import argparse
 
 from .menu_manager import MenuManager
 from .input_handler import InputHandler
+from .display_manager import DisplayManager
+from .tts_manager import TTSManager
 from .settings_manager import SettingsManager
 
 def main():
@@ -29,7 +31,8 @@ def main():
     signal.signal(signal.SIGINT, lambda signal, frame: sys.exit(0))
     
     # Создаем менеджер настроек
-    settings_manager = SettingsManager(settings_dir=args.cache_dir)
+    settings_file = os.path.join(args.cache_dir, "settings.json")
+    settings_manager = SettingsManager(settings_file=settings_file, debug=args.debug)
     
     # Устанавливаем настройки, если они указаны в аргументах
     if args.voice:

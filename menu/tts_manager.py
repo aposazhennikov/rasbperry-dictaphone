@@ -11,6 +11,7 @@ import importlib.util
 import sys
 import traceback
 from .google_tts_manager import GoogleTTSManager
+import sentry_sdk
 
 class TTSManager:
     """Управление озвучкой текста с помощью gTTS или Google Cloud TTS"""
@@ -356,157 +357,176 @@ class TTSManager:
         Returns:
             str: Путь к сгенерированному файлу
         """
-        # Если используем Google Cloud TTS, делегируем ему генерацию
-        if self.tts_engine == "google_cloud" and self.google_tts_manager:
-            return self.google_tts_manager.generate_speech(text, force_regenerate, voice)
-        
-        # Используем указанный голос или текущий по умолчанию
-        if voice is None:
-            voice = self.voice
-            
-        # Сначала получаем имя MP3 файла с учетом голоса
-        mp3_file = self.get_cached_filename(text, use_wav=False, voice=voice)
-        
-        # Если нужен WAV, определяем его имя
-        wav_file = None
-        if self.use_wav:
-            wav_file = self.get_cached_filename(text, use_wav=True, voice=voice)
-        
-        with self.cache_lock:
-            # Проверяем наличие файлов в кэше
-            mp3_exists = os.path.exists(mp3_file)
-            wav_exists = wav_file and os.path.exists(wav_file)
-            
-            # Если нужен MP3 и он есть, или нужен WAV и он есть
-            if (not self.use_wav and mp3_exists and not force_regenerate) or \
-               (self.use_wav and wav_exists and not force_regenerate):
-                # Увеличиваем счётчик использования кэша
-                self.stats["cached_used"] += 1
-                self._save_stats()
+        try:
+            if not text or not isinstance(text, str):
+                return None
                 
-                if self.debug:
-                    print(f"Использован кэш для: {text} (голос: {voice})")
-                    
-                return wav_file if self.use_wav else mp3_file
+            # Если используем Google Cloud TTS, делегируем ему генерацию
+            if self.tts_engine == "google_cloud" and self.google_tts_manager:
+                return self.google_tts_manager.generate_speech(text, force_regenerate, voice)
             
-            # Если нужен WAV, но есть только MP3 и не нужно пересоздавать
-            if self.use_wav and mp3_exists and not force_regenerate:
-                # Конвертируем MP3 в WAV
-                wav_result = self.mp3_to_wav(mp3_file)
-                if wav_result:
+            # Используем указанный голос или текущий по умолчанию
+            if voice is None:
+                voice = self.voice
+            
+            # Сначала получаем имя MP3 файла с учетом голоса
+            mp3_file = self.get_cached_filename(text, use_wav=False, voice=voice)
+            
+            # Если нужен WAV, определяем его имя
+            wav_file = None
+            if self.use_wav:
+                wav_file = self.get_cached_filename(text, use_wav=True, voice=voice)
+            
+            with self.cache_lock:
+                # Проверяем наличие файлов в кэше
+                mp3_exists = os.path.exists(mp3_file)
+                wav_exists = wav_file and os.path.exists(wav_file)
+                
+                # Если нужен MP3 и он есть, или нужен WAV и он есть
+                if (not self.use_wav and mp3_exists and not force_regenerate) or \
+                   (self.use_wav and wav_exists and not force_regenerate):
                     # Увеличиваем счётчик использования кэша
                     self.stats["cached_used"] += 1
                     self._save_stats()
                     
                     if self.debug:
-                        print(f"Использован кэш (конвертация в WAV) для: {text} (голос: {voice})")
+                        print(f"Использован кэш для: {text} (голос: {voice})")
                         
-                    return wav_result
+                    return wav_file if self.use_wav else mp3_file
                 
-            if self.debug:
-                print(f"Генерация озвучки для: {text} (голос: {voice})")
-                
-            # Увеличиваем счетчики запросов
-            self.stats["total_requests"] += 1
-            self.stats["today_requests"] += 1
-            
-            # Замеряем время запроса
-            start_time = time.time()
-            
-            try:
-                # Создаем объект gTTS и сохраняем в MP3-файл
-                # Обратите внимание, что gTTS не поддерживает выбор конкретного голоса напрямую,
-                # но мы все равно храним разные файлы для разных голосов
-                tts = gTTS(text=text, lang=self.lang, tld=self.tld, slow=False)
-                tts.save(mp3_file)
-                
-                # Если нужен WAV, конвертируем MP3 в WAV
-                result_file = mp3_file
-                if self.use_wav:
+                # Если нужен WAV, но есть только MP3 и не нужно пересоздавать
+                if self.use_wav and mp3_exists and not force_regenerate:
+                    # Конвертируем MP3 в WAV
                     wav_result = self.mp3_to_wav(mp3_file)
                     if wav_result:
-                        result_file = wav_result
+                        # Увеличиваем счётчик использования кэша
+                        self.stats["cached_used"] += 1
+                        self._save_stats()
+                        
+                        if self.debug:
+                            print(f"Использован кэш (конвертация в WAV) для: {text} (голос: {voice})")
+                            
+                        return wav_result
                 
-                # Вычисляем время выполнения
-                elapsed_time = time.time() - start_time
-                
-                # Записываем в историю
-                self.stats["requests_history"].append({
-                    "text": text,
-                    "time": elapsed_time,
-                    "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "voice": voice
-                })
-                
-                # Ограничиваем историю до 100 последних запросов
-                if len(self.stats["requests_history"]) > 100:
-                    self.stats["requests_history"] = self.stats["requests_history"][-100:]
+                if self.debug:
+                    print(f"Генерация озвучки для: {text} (голос: {voice})")
                     
-                # Сохраняем статистику
-                self._save_stats()
+                # Увеличиваем счетчики запросов
+                self.stats["total_requests"] += 1
+                self.stats["today_requests"] += 1
                 
-                return result_file
-            except Exception as e:
-                print(f"Ошибка при генерации озвучки: {e}")
-                return None
+                # Замеряем время запроса
+                start_time = time.time()
+                
+                try:
+                    # Создаем объект gTTS и сохраняем в MP3-файл
+                    # Обратите внимание, что gTTS не поддерживает выбор конкретного голоса напрямую,
+                    # но мы все равно храним разные файлы для разных голосов
+                    tts = gTTS(text=text, lang=self.lang, tld=self.tld, slow=False)
+                    tts.save(mp3_file)
+                    
+                    # Если нужен WAV, конвертируем MP3 в WAV
+                    result_file = mp3_file
+                    if self.use_wav:
+                        wav_result = self.mp3_to_wav(mp3_file)
+                        if wav_result:
+                            result_file = wav_result
+                    
+                    # Вычисляем время выполнения
+                    elapsed_time = time.time() - start_time
+                    
+                    # Записываем в историю
+                    self.stats["requests_history"].append({
+                        "text": text,
+                        "time": elapsed_time,
+                        "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "voice": voice
+                    })
+                    
+                    # Ограничиваем историю до 100 последних запросов
+                    if len(self.stats["requests_history"]) > 100:
+                        self.stats["requests_history"] = self.stats["requests_history"][-100:]
+                        
+                    # Сохраняем статистику
+                    self._save_stats()
+                    
+                    return result_file
+                except Exception as e:
+                    print(f"Ошибка при генерации озвучки: {e}")
+                    return None
+        except Exception as e:
+            error_msg = f"Ошибка при генерации речи: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return None
     
-    def play_speech(self, text, voice=None):
+    def play_speech(self, text, voice_id=None, blocking=False):
         """
-        Воспроизводит озвученный текст
+        Озвучивает текст с помощью выбранного движка
         
         Args:
-            text (str): Текст для озвучки
-            voice (str, optional): Идентификатор голоса
+            text (str): Текст для озвучивания
+            voice_id (str): Идентификатор голоса (можно переопределить)
+            blocking (bool): Ожидать окончания воспроизведения
             
         Returns:
-            bool: True если воспроизведение запущено, иначе False
+            bool: True, если озвучивание успешно запущено
         """
-        # Если используем Google Cloud TTS, делегируем ему воспроизведение
-        if self.tts_engine == "google_cloud" and self.google_tts_manager:
-            return self.google_tts_manager.play_speech(text, voice)
-        
-        # Используем указанный голос или текущий по умолчанию
-        if voice is None:
-            voice = self.voice
-            
-        # Если уже что-то воспроизводится, останавливаем
-        self.stop_current_sound()
-        
-        # Генерируем озвучку
-        audio_file = self.generate_speech(text, force_regenerate=False, voice=voice)
-        if not audio_file:
-            return False
-            
         try:
-            # Запускаем процесс воспроизведения звука
-            if self.use_wav:
-                # Для WAV используем paplay или aplay
-                try:
-                    self.current_sound_process = subprocess.Popen(
-                        ["paplay", audio_file],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                    )
-                except:
-                    # Если paplay не доступен, пробуем aplay
-                    self.current_sound_process = subprocess.Popen(
-                        ["aplay", audio_file],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                    )
-            else:
-                # Для MP3 используем mpg123
-                self.current_sound_process = subprocess.Popen(
-                    ["mpg123", audio_file],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                )
+            if not text or not isinstance(text, str):
+                return False
                 
-            # Запускаем поток ожидания завершения воспроизведения
-            self.is_playing = True
-            wait_thread = threading.Thread(target=self.wait_completion, daemon=True)
-            wait_thread.start()
+            # Если используем Google Cloud TTS, делегируем ему воспроизведение
+            if self.tts_engine == "google_cloud" and self.google_tts_manager:
+                return self.google_tts_manager.play_speech(text, voice_id)
             
-            return True
+            # Используем указанный голос или текущий по умолчанию
+            if voice_id is None:
+                voice_id = self.voice
+            
+            # Если уже что-то воспроизводится, останавливаем
+            self.stop_current_sound()
+            
+            # Генерируем озвучку
+            audio_file = self.generate_speech(text, force_regenerate=False, voice=voice_id)
+            if not audio_file:
+                return False
+            
+            try:
+                # Запускаем процесс воспроизведения звука
+                if self.use_wav:
+                    # Для WAV используем paplay или aplay
+                    try:
+                        self.current_sound_process = subprocess.Popen(
+                            ["paplay", audio_file],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                        )
+                    except:
+                        # Если paplay не доступен, пробуем aplay
+                        self.current_sound_process = subprocess.Popen(
+                            ["aplay", audio_file],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                        )
+                else:
+                    # Для MP3 используем mpg123
+                    self.current_sound_process = subprocess.Popen(
+                        ["mpg123", audio_file],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                    )
+                    
+                # Запускаем поток ожидания завершения воспроизведения
+                self.is_playing = True
+                wait_thread = threading.Thread(target=self.wait_completion, daemon=True)
+                wait_thread.start()
+                
+                return True
+            except Exception as e:
+                print(f"Ошибка при воспроизведении звука: {e}")
+                return False
         except Exception as e:
-            print(f"Ошибка при воспроизведении звука: {e}")
+            error_msg = f"Ошибка при воспроизведении речи: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
             return False
     
     def wait_completion(self):
@@ -606,3 +626,41 @@ class TTSManager:
             processed += 1
             if self.debug:
                 print(f"Генерация: {processed}/{total_missing} - {text} (голос: {voice})")
+
+    def speak_text(self, text, voice_id=None):
+        """
+        Синтезирует и воспроизводит речь для указанного текста
+        
+        Args:
+            text (str): Текст для озвучивания
+            voice_id (str): Идентификатор голоса (можно переопределить)
+            
+        Returns:
+            bool: True, если озвучивание успешно запущено
+        """
+        try:
+            return self.play_speech(text, voice_id)
+        except Exception as e:
+            error_msg = f"Ошибка при озвучивании текста: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return False
+
+    def play_speech_blocking(self, text, voice_id=None):
+        """
+        Озвучивает текст и ожидает завершения озвучивания
+        
+        Args:
+            text (str): Текст для озвучивания
+            voice_id (str): Идентификатор голоса (можно переопределить)
+            
+        Returns:
+            bool: True, если озвучивание успешно выполнено
+        """
+        try:
+            return self.play_speech(text, voice_id, blocking=True)
+        except Exception as e:
+            error_msg = f"Ошибка при блокирующем воспроизведении речи: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return False

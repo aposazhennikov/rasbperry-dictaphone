@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from google.cloud import texttospeech
 from google.cloud import monitoring_v3
 import io
+import sentry_sdk
 
 class GoogleTTSManager:
     """Управление озвучкой текста с помощью Google Cloud Text-to-Speech API"""
@@ -38,77 +39,82 @@ class GoogleTTSManager:
             use_wav (bool): Использовать WAV вместо MP3 для более быстрого воспроизведения
             voice (str): Идентификатор голоса для озвучки
         """
-        self.cache_dir = cache_dir
-        self.credentials_file = os.path.abspath(credentials_file)
-        self.lang = lang
-        self.current_sound_process = None
-        self.is_playing = False
-        self.cache_lock = threading.Lock()
-        self.debug = debug
-        self.use_wav = use_wav
-        self.voice = voice
-        self.monitoring_client = None
-        self.project_id = None
-        self.monthly_chars_used = 0
-        self.last_metrics_update = None
-        
-        # Проверяем наличие файла с учетными данными
-        if not os.path.exists(self.credentials_file):
-            raise FileNotFoundError(f"Файл с учетными данными не найден: {self.credentials_file}")
-            
-        # Устанавливаем переменную окружения для аутентификации Google Cloud
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = self.credentials_file
-        
-        # Загружаем информацию о проекте из файла учетных данных
         try:
-            with open(self.credentials_file, 'r') as f:
-                credentials_data = json.load(f)
-                self.project_id = credentials_data.get("project_id")
+            self.cache_dir = cache_dir
+            self.credentials_file = os.path.abspath(credentials_file)
+            self.lang = lang
+            self.current_sound_process = None
+            self.is_playing = False
+            self.cache_lock = threading.Lock()
+            self.debug = debug
+            self.use_wav = use_wav
+            self.voice = voice
+            self.monitoring_client = None
+            self.project_id = None
+            self.monthly_chars_used = 0
+            self.last_metrics_update = None
+            
+            # Проверяем наличие файла с учетными данными
+            if not os.path.exists(self.credentials_file):
+                raise FileNotFoundError(f"Файл с учетными данными не найден: {self.credentials_file}")
+            
+            # Устанавливаем переменную окружения для аутентификации Google Cloud
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = self.credentials_file
+            
+            # Загружаем информацию о проекте из файла учетных данных
+            try:
+                with open(self.credentials_file, 'r') as f:
+                    credentials_data = json.load(f)
+                    self.project_id = credentials_data.get("project_id")
+                    if self.debug:
+                        print(f"ID проекта Google Cloud: {self.project_id}")
+            except Exception as e:
+                print(f"Ошибка при загрузке информации о проекте: {e}")
+            
+            # Инициализируем клиент Google Cloud TTS
+            try:
+                self.client = texttospeech.TextToSpeechClient()
                 if self.debug:
-                    print(f"ID проекта Google Cloud: {self.project_id}")
-        except Exception as e:
-            print(f"Ошибка при загрузке информации о проекте: {e}")
-        
-        # Инициализируем клиент Google Cloud TTS
-        try:
-            self.client = texttospeech.TextToSpeechClient()
-            if self.debug:
-                print(f"Клиент Google Cloud TTS инициализирован успешно")
+                    print(f"Клиент Google Cloud TTS инициализирован успешно")
                 
-            # Если есть ID проекта, инициализируем клиент мониторинга
-            if self.project_id:
-                self.monitoring_client = monitoring_v3.MetricServiceClient()
-                # Получаем начальные метрики использования
-                self._update_usage_metrics()
-        except Exception as e:
-            print(f"Ошибка при инициализации клиента Google Cloud TTS: {e}")
-            raise
-        
-        # Статистика для режима отладки
-        self.stats_file = os.path.join(cache_dir, "google_tts_stats.json")
-        self.stats = {
-            "total_requests": 0,
-            "today_requests": 0,
-            "today_date": datetime.now().strftime("%Y-%m-%d"),
-            "cached_used": 0,
-            "requests_history": [],
-            "total_chars": 0,
-            "month_chars": 0,
-            "estimated_cost": 0.0
-        }
-        
-        # Создаем директорию для кэша, если она не существует
-        if not os.path.exists(cache_dir):
-            os.makedirs(cache_dir)
+                # Если есть ID проекта, инициализируем клиент мониторинга
+                if self.project_id:
+                    self.monitoring_client = monitoring_v3.MetricServiceClient()
+                    # Получаем начальные метрики использования
+                    self._update_usage_metrics()
+            except Exception as e:
+                print(f"Ошибка при инициализации клиента Google Cloud TTS: {e}")
+                raise
             
-        # Загружаем статистику если она есть
-        self._load_stats()
-        
-        # Обновляем счетчик дневных запросов
-        self._update_day_counter()
-        
-        if self.debug:
-            print(f"GoogleTTSManager инициализирован. Голос по умолчанию: {voice}")
+            # Статистика для режима отладки
+            self.stats_file = os.path.join(cache_dir, "google_tts_stats.json")
+            self.stats = {
+                "total_requests": 0,
+                "today_requests": 0,
+                "today_date": datetime.now().strftime("%Y-%m-%d"),
+                "cached_used": 0,
+                "requests_history": [],
+                "total_chars": 0,
+                "month_chars": 0,
+                "estimated_cost": 0.0
+            }
+            
+            # Создаем директорию для кэша, если она не существует
+            if not os.path.exists(cache_dir):
+                os.makedirs(cache_dir)
+            
+            # Загружаем статистику если она есть
+            self._load_stats()
+            
+            # Обновляем счетчик дневных запросов
+            self._update_day_counter()
+            
+            if self.debug:
+                print(f"GoogleTTSManager инициализирован. Голос по умолчанию: {voice}")
+        except Exception as e:
+            error_msg = f"Ошибка при инициализации GoogleTTSManager: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
     
     def _update_usage_metrics(self):
         """Обновляет метрики использования API из Google Cloud Monitoring"""

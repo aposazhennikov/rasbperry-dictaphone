@@ -1,102 +1,138 @@
 #!/usr/bin/env python3
 import os
 import json
+import sentry_sdk
 
 class SettingsManager:
-    """Управление настройками приложения"""
+    """Класс для управления настройками приложения"""
     
-    def __init__(self, settings_dir="/home/aleks/cache_tts"):
+    def __init__(self, settings_file="settings.json", debug=False):
         """
         Инициализация менеджера настроек
         
         Args:
-            settings_dir (str): Директория для хранения настроек
+            settings_file (str): Путь к файлу настроек
+            debug (bool): Режим отладки
         """
-        self.settings_dir = settings_dir
-        self.settings_file = os.path.join(settings_dir, "settings.json")
-        
-        # Настройки по умолчанию
-        self.settings = {
-            "voice": "ru-RU-Standard-A",  # женский голос по умолчанию
-            "tts_engine": "gtts",  # двигатель синтеза речи (gtts или google_cloud)
-            "google_cloud_credentials": "credentials-google-api.json"  # путь к файлу с учетными данными
-        }
-        
-        # Создаем директорию для настроек, если она не существует
-        if not os.path.exists(settings_dir):
-            os.makedirs(settings_dir)
+        try:
+            self.settings_file = settings_file
+            self.debug = debug
             
-        # Загружаем настройки, если они существуют
-        self.load_settings()
+            # Настройки по умолчанию
+            self.settings = {
+                "voice": "ru-RU-Standard-A",
+                "tts_engine": "gtts",
+                "google_cloud_credentials": None
+            }
+            
+            # Создаем директорию для файла настроек, если её нет
+            os.makedirs(os.path.dirname(os.path.abspath(settings_file)), exist_ok=True)
+            
+            # Загружаем настройки из файла, если он существует
+            self.load_settings()
+            
+            if self.debug:
+                print("SettingsManager инициализирован")
+        except Exception as e:
+            error_msg = f"Ошибка при инициализации SettingsManager: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
     
     def load_settings(self):
         """Загружает настройки из файла"""
-        if os.path.exists(self.settings_file):
-            try:
-                with open(self.settings_file, 'r') as f:
+        try:
+            if os.path.exists(self.settings_file):
+                with open(self.settings_file, 'r', encoding='utf-8') as f:
                     loaded_settings = json.load(f)
-                    # Обновляем только существующие настройки
-                    for key, value in loaded_settings.items():
-                        if key in self.settings:
-                            self.settings[key] = value
-            except Exception as e:
-                print(f"Ошибка при загрузке настроек: {e}")
+                    self.settings.update(loaded_settings)
+                    
+                if self.debug:
+                    print(f"Настройки загружены из файла: {self.settings_file}")
+                    print(f"Текущие настройки: {self.settings}")
+        except Exception as e:
+            error_msg = f"Ошибка при загрузке настроек: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
     
     def save_settings(self):
         """Сохраняет настройки в файл"""
         try:
-            with open(self.settings_file, 'w') as f:
-                json.dump(self.settings, f, indent=2)
+            with open(self.settings_file, 'w', encoding='utf-8') as f:
+                json.dump(self.settings, f, ensure_ascii=False, indent=4)
+                
+            if self.debug:
+                print(f"Настройки сохранены в файл: {self.settings_file}")
         except Exception as e:
-            print(f"Ошибка при сохранении настроек: {e}")
-    
+            error_msg = f"Ошибка при сохранении настроек: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            
     def get_voice(self):
         """
-        Возвращает текущий выбранный голос
+        Возвращает текущий голос
         
         Returns:
             str: Идентификатор голоса
         """
-        return self.settings["voice"]
-    
+        try:
+            return self.settings.get("voice", "ru-RU-Standard-A")
+        except Exception as e:
+            error_msg = f"Ошибка при получении голоса: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return "ru-RU-Standard-A"
+            
     def set_voice(self, voice):
         """
-        Устанавливает голос для озвучки
+        Устанавливает голос
         
         Args:
             voice (str): Идентификатор голоса
         """
-        available_voices = self.get_available_voices()
-        if voice in available_voices:
+        try:
             self.settings["voice"] = voice
             self.save_settings()
-            return True
-        return False
-    
+            
+            if self.debug:
+                print(f"Установлен голос: {voice}")
+        except Exception as e:
+            error_msg = f"Ошибка при установке голоса: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            
     def get_tts_engine(self):
         """
-        Возвращает текущий выбранный движок TTS
+        Возвращает текущий движок TTS
         
         Returns:
-            str: Название движка TTS (gtts или google_cloud)
+            str: Название движка ("gtts" или "google_cloud")
         """
-        return self.settings["tts_engine"]
-    
+        try:
+            return self.settings.get("tts_engine", "gtts")
+        except Exception as e:
+            error_msg = f"Ошибка при получении движка TTS: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return "gtts"
+            
     def set_tts_engine(self, engine):
         """
         Устанавливает движок TTS
         
         Args:
-            engine (str): Название движка TTS (gtts или google_cloud)
-        
-        Returns:
-            bool: True если успешно, иначе False
+            engine (str): Название движка ("gtts" или "google_cloud")
         """
-        if engine in ["gtts", "google_cloud"]:
-            self.settings["tts_engine"] = engine
-            self.save_settings()
-            return True
-        return False
+        try:
+            if engine in ["gtts", "google_cloud"]:
+                self.settings["tts_engine"] = engine
+                self.save_settings()
+                
+                if self.debug:
+                    print(f"Установлен движок TTS: {engine}")
+        except Exception as e:
+            error_msg = f"Ошибка при установке движка TTS: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
     
     def get_google_cloud_credentials(self):
         """
