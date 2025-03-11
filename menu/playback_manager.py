@@ -587,12 +587,22 @@ class PlaybackManager:
         """
         try:
             if self.debug:
-                print("Попытка возобновления воспроизведения после паузы")
+                print("\n*** ПОПЫТКА ВОЗОБНОВЛЕНИЯ ВОСПРОИЗВЕДЕНИЯ ***")
+                print(f"Текущее состояние: active={self.playback_info['active']}, paused={self.playback_info['paused']}")
+                print(f"Плеер: active={self.player.is_active()}, on_pause={self.player.is_on_pause() if hasattr(self.player, 'is_on_pause') else 'метод недоступен'}")
+                print(f"Текущая позиция: {self.player.get_current_position() if hasattr(self.player, 'get_current_position') else 'неизвестно'}")
                 
-            if not self.playback_info["active"] or not self.playback_info["paused"]:
+            # Проверяем состояние воспроизведения
+            if not self.playback_info["active"]:
                 if self.debug:
-                    print("Невозможно возобновить: воспроизведение не активно или не на паузе")
+                    print("Невозможно возобновить: воспроизведение не активно")
                 return False
+            
+            # Пропускаем проверку на паузу, чтобы гарантированно возобновить воспроизведение
+            # if not self.playback_info["paused"]:
+            #     if self.debug:
+            #         print("Невозможно возобновить: воспроизведение не на паузе")
+            #     return False
             
             # Получаем текущую позицию до возобновления
             try:
@@ -609,7 +619,7 @@ class PlaybackManager:
             
             if result:
                 if self.debug:
-                    print(f"Воспроизведение возобновлено с позиции {current_position}")
+                    print(f"Воспроизведение успешно возобновлено с позиции {current_position}")
                     
                 # Обновляем состояние
                 self.playback_info["paused"] = False
@@ -621,7 +631,24 @@ class PlaybackManager:
                 return True
             else:
                 if self.debug:
-                    print("Не удалось возобновить воспроизведение")
+                    print("Не удалось возобновить воспроизведение через resume(), пробуем play()")
+                
+                # Если не удалось возобновить через resume(), пробуем просто воспроизвести файл
+                result = self.player.play()
+                
+                if result:
+                    if self.debug:
+                        print("Воспроизведение запущено через play()")
+                    
+                    # Обновляем состояние
+                    self.playback_info["paused"] = False
+                    
+                    # Обновляем интерфейс
+                    if self.update_callback:
+                        self.update_callback()
+                        
+                    return True
+                
                 sentry_sdk.capture_message("Не удалось возобновить воспроизведение", level="error")
                 return False
                 
@@ -753,10 +780,10 @@ class PlaybackManager:
         """
         try:
             # Определение всех используемых кодов клавиш
-            KEY_SELECT = 353  # Пауза/воспроизведение
+            KEY_SELECT = 353  # Пауза/воспроизведение/подтверждение
             KEY_BACK = 158    # Выход из режима воспроизведения
-            KEY_UP = 103      # Увеличение громкости
-            KEY_DOWN = 108    # Уменьшение громкости
+            KEY_UP = 103      # Увеличение громкости/навигация вверх
+            KEY_DOWN = 108    # Уменьшение громкости/навигация вниз
             KEY_RIGHT = 106   # Перемотка вперед / ускоренное воспроизведение
             KEY_LEFT = 105    # Перемотка назад
             KEY_PAGEUP = 104  # Предыдущий файл
@@ -765,6 +792,38 @@ class PlaybackManager:
             
             if self.debug:
                 print(f"Обработка клавиши {key_code}, pressed={pressed}")
+            
+            # Если активен режим подтверждения удаления, обрабатываем специальным образом
+            if self.confirm_delete_active and pressed:
+                if key_code == KEY_SELECT:
+                    # При KEY_SELECT подтверждаем текущий выбор
+                    if self.confirm_delete_selected == "Да":
+                        self.confirm_delete(True)  # Подтверждаем удаление
+                    else:
+                        self.confirm_delete(False)  # Отменяем удаление
+                    return True
+                elif key_code == KEY_UP or key_code == KEY_DOWN:
+                    # Переключение между "Да" и "Нет"
+                    self.confirm_delete_selected = "Да" if self.confirm_delete_selected == "Нет" else "Нет"
+                    
+                    # Озвучиваем текущий выбор
+                    voice_id = "ru-RU-Standard-D"
+                    self.tts_manager.play_speech(self.confirm_delete_selected, voice_id=voice_id)
+                    
+                    if self.update_callback:
+                        self.update_callback()
+                    return True
+                elif key_code == KEY_BACK:
+                    # При KEY_BACK отменяем удаление
+                    self.cancel_confirm_delete()
+                    return True
+                elif key_code == KEY_POWER:
+                    # При KEY_POWER отменяем удаление
+                    self.cancel_confirm_delete()
+                    return True
+                
+                # В режиме подтверждения удаления все другие клавиши игнорируем
+                return True
                 
             # Обработка однократных нажатий (только при нажатии, не при отпускании)
             if pressed:
@@ -878,21 +937,23 @@ class PlaybackManager:
             was_playing = self.playback_info["active"]
             was_paused = self.playback_info["paused"]
             
-            if was_playing and not was_paused:
-                if self.debug:
-                    print("Приостанавливаем воспроизведение перед удалением")
-                self.player.pause()
-                self.playback_info["paused"] = True
+            # В любом случае (активное воспроизведение или пауза) ставим на паузу
+            if was_playing:
+                if not was_paused:
+                    if self.debug:
+                        print("Приостанавливаем воспроизведение перед удалением")
+                    self.player.pause()
+                    self.playback_info["paused"] = True
             
             # Активируем режим подтверждения
             self.confirm_delete_active = True
-            self.confirm_delete_selected = "Нет"
+            self.confirm_delete_selected = "Нет"  # По умолчанию "Нет"
             
             # Используем мужской голос для системных сообщений
             voice_id = "ru-RU-Standard-D"
             
             # Озвучиваем запрос на подтверждение
-            message = f"Вы точно хотите удалить запись {file_info['description']}?"
+            message = f"Вы точно хотите удалить эту запись?"
             if self.debug:
                 print(f"Запрос подтверждения: {message}")
                 
@@ -905,6 +966,7 @@ class PlaybackManager:
                         time.sleep(1.5)
                 except Exception as e:
                     print(f"Ошибка при озвучивании запроса на удаление: {e}")
+                    sentry_sdk.capture_exception(e)
             
             # Обновляем интерфейс для отображения меню подтверждения
             if self.update_callback:
@@ -927,29 +989,47 @@ class PlaybackManager:
         Returns:
             bool: True если операция выполнена, иначе False
         """
-        if not self.confirm_delete_active:
-            return False
-        
-        # Сбрасываем состояние подтверждения
-        self.confirm_delete_active = False
-        self.confirm_delete_selected = "Нет" if confirmed else "Да"
-        
-        if confirmed:
-            # Выполняем удаление файла
-            return self._execute_delete()
-        else:
-            # Возобновляем воспроизведение, если оно было активно
-            if self.player.is_active() and self.player.is_on_pause():
-                self.player.resume()
+        try:
+            if not self.confirm_delete_active:
+                return False
+            
+            # Сбрасываем состояние подтверждения
+            self.confirm_delete_active = False
+            self.confirm_delete_selected = "Нет"
+            
+            if confirmed:
+                # Выполняем удаление файла
+                return self._execute_delete()
+            else:
+                # Возобновляем воспроизведение, если оно было активно
+                was_playing = self.playback_info["active"]
                 
-                # Сообщаем об отмене
-                self.tts_manager.play_speech("Удаление отменено")
+                if self.debug:
+                    print(f"\n*** ОТМЕНА УДАЛЕНИЯ ФАЙЛА ***")
+                    print(f"Статус воспроизведения: активно={was_playing}, на паузе={self.playback_info['paused']}")
+                    print(f"Player: активен={self.player.is_active()}, на паузе={self.player.is_on_pause() if hasattr(self.player, 'is_on_pause') else 'метод недоступен'}")
+                
+                # Гарантированно устанавливаем статус активного воспроизведения
+                self.playback_info["active"] = True
+                self.playback_info["paused"] = True  # Сначала ставим паузу, чтобы resume_from_pause сработал
+                
+                # Возобновляем воспроизведение без лишних сообщений
+                if self.debug:
+                    print("Возобновляем воспроизведение после отмены удаления (без сообщения)")
+                
+                # Используем resume_from_pause для надежного возобновления
+                result = self.resume_from_pause()
                 
                 # Обновляем интерфейс
                 if self.update_callback:
                     self.update_callback()
-            
-            return True
+                
+                return True
+        except Exception as e:
+            error_msg = f"Ошибка при подтверждении/отмене удаления: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return False
     
     def cancel_confirm_delete(self):
         """
@@ -967,43 +1047,59 @@ class PlaybackManager:
         Returns:
             bool: True если файл успешно удален, иначе False
         """
-        if not self.files_list or self.current_index < 0 or self.current_index >= len(self.files_list):
-            return False
-        
-        # Получаем путь к файлу
-        file_path = self.files_list[self.current_index]
-        
-        # Останавливаем воспроизведение, если оно активно
-        if self.player.is_active():
-            self.player.stop()
-        
-        # Удаляем файл
         try:
-            os.remove(file_path)
+            if not self.files_list or self.current_index < 0 or self.current_index >= len(self.files_list):
+                return False
             
-            if self.debug:
-                print(f"Файл удален: {file_path}")
+            # Получаем путь к файлу
+            file_path = self.files_list[self.current_index]
             
-            # Удаляем файл из списка
-            del self.files_list[self.current_index]
+            # Останавливаем воспроизведение, если оно активно
+            if self.player.is_active():
+                self.player.stop()
+                self.playback_info["active"] = False
+                self.playback_info["paused"] = False
             
-            # Корректируем текущий индекс
-            if not self.files_list:
-                self.current_index = -1
-            elif self.current_index >= len(self.files_list):
-                self.current_index = len(self.files_list) - 1
-            
-            # Озвучиваем результат
-            self.tts_manager.play_speech("Запись удалена")
-            
-            # Обновляем интерфейс
-            if self.update_callback:
-                self.update_callback()
-            
-            return True
+            # Удаляем файл
+            try:
+                os.remove(file_path)
+                
+                if self.debug:
+                    print(f"Файл удален: {file_path}")
+                
+                # Удаляем файл из списка
+                del self.files_list[self.current_index]
+                
+                # Корректируем текущий индекс
+                if not self.files_list:
+                    self.current_index = -1
+                elif self.current_index >= len(self.files_list):
+                    self.current_index = len(self.files_list) - 1
+                
+                # Озвучиваем результат
+                voice_id = "ru-RU-Standard-D"
+                self.tts_manager.play_speech("Запись удалена", voice_id=voice_id)
+                
+                # Обновляем интерфейс
+                if self.update_callback:
+                    self.update_callback()
+                
+                return True
+            except Exception as file_e:
+                if self.debug:
+                    print(f"Ошибка при удалении файла: {file_e}")
+                
+                sentry_sdk.capture_exception(file_e)
+                
+                # Озвучиваем ошибку
+                self.tts_manager.play_speech("Ошибка при удалении записи")
+                
+                return False
         except Exception as e:
             if self.debug:
                 print(f"Ошибка при удалении файла: {e}")
+            
+            sentry_sdk.capture_exception(e)
             
             # Озвучиваем ошибку
             self.tts_manager.play_speech("Ошибка при удалении записи")
@@ -1078,4 +1174,38 @@ class PlaybackManager:
             error_msg = f"Ошибка при установке текущего файла: {e}"
             print(error_msg)
             sentry_sdk.capture_exception(e)
-            return False 
+            return False
+    
+    def count_files_in_folder(self, folder):
+        """
+        Подсчитывает количество аудиофайлов в указанной папке
+        
+        Args:
+            folder (str): Папка для подсчета (A, B или C)
+            
+        Returns:
+            int: Количество аудиофайлов в папке
+        """
+        try:
+            if folder not in ['A', 'B', 'C']:
+                if self.debug:
+                    print(f"Неверная папка: {folder}")
+                return 0
+                
+            # Формируем путь к папке
+            folder_path = os.path.join(self.base_dir, folder)
+            
+            if not os.path.exists(folder_path):
+                if self.debug:
+                    print(f"Папка не существует: {folder_path}")
+                return 0
+                
+            # Получаем список аудиофайлов
+            audio_files = self._get_audio_files(folder_path)
+            
+            return len(audio_files)
+        except Exception as e:
+            error_msg = f"Ошибка при подсчете файлов в папке {folder}: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return 0 

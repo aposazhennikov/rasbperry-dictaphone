@@ -1117,17 +1117,27 @@ class MenuManager:
     
     def _show_folder_selection_menu(self):
         """Показывает меню выбора папки для записи"""
-        # Создаем временное подменю для выбора папки
-        folder_menu = SubMenu("Выберите папку для записи", parent=self.current_menu)
-        
-        # Добавляем пункты меню для папок
-        folder_menu.add_item(MenuItem("Папка A", action=lambda: self._start_recording("A")))
-        folder_menu.add_item(MenuItem("Папка B", action=lambda: self._start_recording("B")))
-        folder_menu.add_item(MenuItem("Папка C", action=lambda: self._start_recording("C")))
-        
-        # Переключаемся на меню выбора папки
-        self.current_menu = folder_menu
-        self.display_current_menu()
+        try:
+            # Создаем временное подменю для выбора папки
+            folder_menu = SubMenu("Выберите папку для записи", parent=self.current_menu)
+            
+            # Получаем количество файлов в каждой папке
+            files_in_a = self.playback_manager.count_files_in_folder("A")
+            files_in_b = self.playback_manager.count_files_in_folder("B")
+            files_in_c = self.playback_manager.count_files_in_folder("C")
+            
+            # Добавляем пункты меню для папок с указанием количества файлов
+            folder_menu.add_item(MenuItem(f"Папка A [{files_in_a} {self._get_files_word(files_in_a)}]", action=lambda: self._start_recording("A")))
+            folder_menu.add_item(MenuItem(f"Папка B [{files_in_b} {self._get_files_word(files_in_b)}]", action=lambda: self._start_recording("B")))
+            folder_menu.add_item(MenuItem(f"Папка C [{files_in_c} {self._get_files_word(files_in_c)}]", action=lambda: self._start_recording("C")))
+            
+            # Переключаемся на меню выбора папки
+            self.current_menu = folder_menu
+            self.display_current_menu()
+        except Exception as e:
+            error_msg = f"Ошибка при отображении меню выбора папки: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
     
     def _show_calendar_menu(self):
         # Implementation of _show_calendar_menu method
@@ -1135,17 +1145,27 @@ class MenuManager:
 
     def _show_play_record_menu(self):
         """Показывает меню воспроизведения записей"""
-        # Создаем временное подменю для выбора папки
-        play_menu = SubMenu("Выберите папку для воспроизведения", parent=self.current_menu)
-        
-        # Добавляем пункты меню для папок
-        play_menu.add_item(MenuItem("Папка A", action=lambda: self._show_play_files_menu("A")))
-        play_menu.add_item(MenuItem("Папка B", action=lambda: self._show_play_files_menu("B")))
-        play_menu.add_item(MenuItem("Папка C", action=lambda: self._show_play_files_menu("C")))
-        
-        # Переключаемся на меню выбора папки
-        self.current_menu = play_menu
-        self.display_current_menu()
+        try:
+            # Создаем временное подменю для выбора папки
+            play_menu = SubMenu("Выберите папку для воспроизведения", parent=self.current_menu)
+            
+            # Получаем количество файлов в каждой папке
+            files_in_a = self.playback_manager.count_files_in_folder("A")
+            files_in_b = self.playback_manager.count_files_in_folder("B")
+            files_in_c = self.playback_manager.count_files_in_folder("C")
+            
+            # Добавляем пункты меню для папок с указанием количества файлов
+            play_menu.add_item(MenuItem(f"Папка A [{files_in_a} {self._get_files_word(files_in_a)}]", action=lambda: self._show_play_files_menu("A")))
+            play_menu.add_item(MenuItem(f"Папка B [{files_in_b} {self._get_files_word(files_in_b)}]", action=lambda: self._show_play_files_menu("B")))
+            play_menu.add_item(MenuItem(f"Папка C [{files_in_c} {self._get_files_word(files_in_c)}]", action=lambda: self._show_play_files_menu("C")))
+            
+            # Переключаемся на меню выбора папки
+            self.current_menu = play_menu
+            self.display_current_menu()
+        except Exception as e:
+            error_msg = f"Ошибка при отображении меню воспроизведения: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
     
     def _show_delete_record_menu(self):
         # Implementation of _show_delete_record_menu method
@@ -1153,39 +1173,57 @@ class MenuManager:
 
     def _update_playback_info(self):
         """Обновляет информацию о текущем воспроизведении"""
-        # Получаем информацию о воспроизведении
-        player_info = self.playback_manager.playback_info
-        
-        # Обновляем состояние воспроизведения
-        self.playback_state["active"] = player_info["active"]
-        self.playback_state["paused"] = player_info["paused"]
-        self.playback_state["position"] = player_info["position"]
-        self.playback_state["duration"] = player_info["duration"]
-        self.playback_state["progress"] = player_info["progress"]
-        
-        # Получаем информацию о текущем файле
-        file_info = self.playback_manager.get_current_file_info()
-        if file_info:
-            self.playback_state["current_file"] = file_info["description"]
-            self.playback_state["folder"] = file_info["folder"]
-        
-        # Обновляем экран воспроизведения, если воспроизведение активно
-        if self.playback_state["active"]:
-            status = "Paused" if self.playback_state["paused"] else "Playing"
-            self.display_manager.display_playback_screen(
-                status=status,
-                time=f"{self.playback_state['position']} / {self.playback_state['duration']}",
-                progress=self.playback_state["progress"],
-                file_name=self.playback_state["current_file"],
-                folder=self.playback_state["folder"]
-            )
+        try:
+            # Получаем информацию о воспроизведении
+            player_info = self.playback_manager.playback_info
             
-            if self.debug:
-                print(f"Обновление информации о воспроизведении: " +
-                      f"активно={self.playback_state['active']}, " +
-                      f"пауза={self.playback_state['paused']}, " +
-                      f"время={self.playback_state['position']} / {self.playback_state['duration']}, " +
-                      f"файл={self.playback_state['current_file']}")
+            # Обновляем состояние воспроизведения
+            self.playback_state["active"] = player_info["active"]
+            self.playback_state["paused"] = player_info["paused"]
+            self.playback_state["position"] = player_info["position"]
+            self.playback_state["duration"] = player_info["duration"]
+            self.playback_state["progress"] = player_info["progress"]
+            
+            # Получаем информацию о текущем файле
+            file_info = self.playback_manager.get_current_file_info()
+            if file_info:
+                self.playback_state["current_file"] = file_info["description"]
+                self.playback_state["folder"] = file_info["folder"]
+            
+            # Проверяем, активен ли режим подтверждения удаления
+            if self.playback_manager.is_delete_confirmation_active():
+                # Отображаем экран подтверждения удаления
+                self.display_manager.display_delete_confirmation(
+                    file_name=self.playback_state["current_file"],
+                    selected_option=self.playback_manager.confirm_delete_selected
+                )
+                
+                if self.debug:
+                    print(f"Отображение экрана подтверждения удаления: " +
+                        f"файл={self.playback_state['current_file']}, " +
+                        f"выбрано={self.playback_manager.confirm_delete_selected}")
+            
+            # Обновляем экран воспроизведения, если воспроизведение активно и не активен режим подтверждения
+            elif self.playback_state["active"]:
+                status = "Paused" if self.playback_state["paused"] else "Playing"
+                self.display_manager.display_playback_screen(
+                    status=status,
+                    time=f"{self.playback_state['position']} / {self.playback_state['duration']}",
+                    progress=self.playback_state["progress"],
+                    file_name=self.playback_state["current_file"],
+                    folder=self.playback_state["folder"]
+                )
+                
+                if self.debug:
+                    print(f"Обновление информации о воспроизведении: " +
+                        f"активно={self.playback_state['active']}, " +
+                        f"пауза={self.playback_state['paused']}, " +
+                        f"время={self.playback_state['position']} / {self.playback_state['duration']}, " +
+                        f"файл={self.playback_state['current_file']}")
+        except Exception as e:
+            error_msg = f"Ошибка при обновлении информации о воспроизведении: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
     
     def _show_play_files_menu(self, folder):
         """
@@ -1633,11 +1671,34 @@ class MenuManager:
         Args:
             confirmed (bool): True для подтверждения, False для отмены
         """
-        if not self.playback_manager.is_delete_confirmation_active():
-            return
+        try:
+            if not self.playback_manager.is_delete_confirmation_active():
+                return
+            
+            if self.debug:
+                print(f"\n*** ПОДТВЕРЖДЕНИЕ/ОТМЕНА УДАЛЕНИЯ: {confirmed} ***")
+                print(f"Состояние до: player_mode={self.player_mode_active}, playback_active={self.playback_state['active']}")
+            
+            # Подтверждаем или отменяем удаление
+            result = self.playback_manager.confirm_delete(confirmed)
+            
+            # Если отменили удаление - гарантируем, что мы остаемся в режиме воспроизведения
+            if not confirmed:
+                # Гарантируем, что режим аудиоплеера активен
+                self.player_mode_active = True
+                
+                # Обновляем состояние воспроизведения
+                self.playback_state["active"] = True
+                self.playback_state["paused"] = False
+                
+                if self.debug:
+                    print(f"Отмена удаления: принудительно устанавливаем режим воспроизведения")
+                    print(f"Состояние после: player_mode={self.player_mode_active}, playback_active={self.playback_state['active']}")
         
-        # Подтверждаем или отменяем удаление
-        self.playback_manager.confirm_delete(confirmed)
+        except Exception as e:
+            error_msg = f"Ошибка при подтверждении/отмене удаления: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
     
     def _next_file(self):
         """Переходит к следующему файлу в списке"""
@@ -1801,42 +1862,15 @@ class MenuManager:
                                         result = find_files_menu(item, folder_name)
                                         if result:
                                             return result
+                            
                             return None
                         
-                        # Ищем меню с записями начиная с корневого
-                        files_menu = find_files_menu(self.root_menu, folder)
-                        
-                        if files_menu:
-                            print(f"Найдено меню записей: {files_menu.name}")
-                            return_menu = files_menu
-                        else:
-                            print(f"Меню записей для папки {folder} не найдено")
-                    
-                    # Если не нашли меню по названию, пробуем получить его из playback_manager
-                    if not return_menu and hasattr(self.playback_manager, 'get_return_menu'):
                         try:
-                            files_menu = self.playback_manager.get_return_menu()
-                            if files_menu:
-                                print(f"Получено меню из playback_manager: {files_menu.name}")
-                                return_menu = files_menu
-                        except Exception as menu_e:
-                            print(f"Ошибка при получении меню из playback_manager: {menu_e}")
-                            sentry_sdk.capture_exception(menu_e)
-                
-                # 4. Переходим в нужное меню
-                if return_menu:
-                    self.current_menu = return_menu
-                    print(f"Переход в меню: {return_menu.name}")
-                else:
-                    # Если не нашли нужное меню, проверяем возможность создать его
-                    folder = self.playback_state.get("folder") or getattr(self.playback_manager, 'current_folder', None)
-                    if folder and hasattr(self, '_show_play_files_menu'):
-                        try:
-                            print(f"Пытаемся создать новое меню файлов для папки {folder}")
-                            self._show_play_files_menu(folder)
-                            return True
+                            return_menu = find_files_menu(self.root_menu, folder)
+                            if return_menu:
+                                print(f"Найдено меню для папки {folder}: {return_menu.name}")
                         except Exception as create_menu_e:
-                            print(f"Ошибка при создании меню файлов: {create_menu_e}")
+                            print(f"Ошибка при поиске меню для папки {folder}: {create_menu_e}")
                             sentry_sdk.capture_exception(create_menu_e)
                     
                     # Если не получается создать меню, идем в родительское
@@ -1874,8 +1908,49 @@ class MenuManager:
                 print(f"Текущий режим: {'АУДИОПЛЕЕР' if is_player_mode else 'МЕНЮ'}")
                 print(f"Запись активна: {is_recording}, Воспроизведение активно: {is_playing}")
             
+            # Проверяем, активен ли режим подтверждения удаления
+            if self.playback_manager.is_delete_confirmation_active():
+                # Обработка кнопок в режиме подтверждения удаления
+                if button_id == "KEY_UP" or button_id == "KEY_DOWN":
+                    # Переключение между "Да" и "Нет"
+                    current_selection = self.playback_manager.confirm_delete_selected
+                    self.playback_manager.confirm_delete_selected = "Да" if current_selection == "Нет" else "Нет"
+                    
+                    # Озвучиваем текущий выбор без лишних сообщений
+                    voice_id = "ru-RU-Standard-D"
+                    self.tts_manager.play_speech(self.playback_manager.confirm_delete_selected, voice_id=voice_id)
+                    
+                    # Обновляем экран
+                    self._update_playback_info()
+                    return True
+                
+                elif button_id == "KEY_SELECT":
+                    # Подтверждаем выбор
+                    confirmed = self.playback_manager.confirm_delete_selected == "Да"
+                    self._confirm_delete(confirmed)
+                    
+                    # Если отменили удаление (выбрали "Нет"), гарантируем, что остаемся в режиме воспроизведения
+                    if not confirmed:
+                        self.player_mode_active = True
+                        self.playback_state["active"] = True
+                    
+                    return True
+                
+                elif button_id == "KEY_BACK" or button_id == "KEY_POWER":
+                    # Отменяем удаление
+                    self._confirm_delete(False)
+                    
+                    # Гарантируем, что остаемся в режиме воспроизведения
+                    self.player_mode_active = True
+                    self.playback_state["active"] = True
+                    
+                    return True
+                
+                # В режиме подтверждения удаления все другие кнопки игнорируем
+                return True
+            
             # В режиме аудиоплеера обрабатываем кнопки по-особому
-            if is_player_mode and is_playing:
+            elif is_player_mode and is_playing:
                 # Обработка кнопок в режиме аудиоплеера
                 if button_id == "KEY_UP":
                     # Увеличиваем громкость
@@ -1909,21 +1984,10 @@ class MenuManager:
                         print("Вызов _stop_playback из стандартного обработчика KEY_BACK")
                     self._stop_playback()
                     return True
-                    
-                elif button_id == "KEY_1":
+                
+                elif button_id == "KEY_POWER":
                     # Удаление текущего файла
-                    if self.playback_manager.is_delete_confirmation_active():
-                        # Подтверждаем удаление
-                        self._confirm_delete(True)
-                    else:
-                        # Инициируем удаление
-                        self._delete_current_file()
-                    return True
-                    
-                elif button_id == "KEY_2":
-                    # Отмена удаления
-                    if self.playback_manager.is_delete_confirmation_active():
-                        self._confirm_delete(False)
+                    self._delete_current_file()
                     return True
                 
                 # Все остальные кнопки игнорируем в режиме аудиоплеера
@@ -1970,3 +2034,22 @@ class MenuManager:
             print(error_msg)
             sentry_sdk.capture_exception(e)
             return False
+
+    def _get_files_word(self, count):
+        """
+        Возвращает правильную форму слова "файл" в зависимости от числа
+        
+        Args:
+            count (int): Количество файлов
+            
+        Returns:
+            str: Правильная форма слова
+        """
+        if count % 100 in (11, 12, 13, 14):
+            return "файлов"
+        elif count % 10 == 1:
+            return "файл"
+        elif count % 10 in (2, 3, 4):
+            return "файла"
+        else:
+            return "файлов"
