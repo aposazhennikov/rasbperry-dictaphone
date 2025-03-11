@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import sentry_sdk
+
 from .menu_manager import MenuManager
 from .menu_item import MenuItem, SubMenu, Menu
 from .tts_manager import TTSManager

@@ -102,214 +102,344 @@ class RecorderManager:
     
     def start_recording(self, folder):
         """
-        Начинает запись аудио в указанную папку
+        Начинает запись в указанную папку
         
         Args:
             folder (str): Папка для сохранения записи (A, B или C)
             
         Returns:
-            bool: True, если запись успешно начата, False в противном случае
+            bool: True если запись успешно начата, False в случае ошибки
         """
         try:
-            # Проверяем свободное место перед началом записи
-            has_space, free_space = self.recorder.check_disk_space()
-            
-            # Если мало места, выдаем предупреждение
-            if not has_space:
-                print("Предупреждение о малом количестве места на диске")
-                # Проигрываем системное предупреждение
-                self.play_notification(self.low_disk_space_warning)
-            
-            # 1. Сначала озвучиваем сообщение о начале записи
-            message = f"Начата запись в папку {folder}"
-            print(f"Воспроизведение сообщения: {message}")
-            self.play_notification(message)
-            
-            # Ждем, чтобы убедиться, что сообщение полностью воспроизведено
-            time.sleep(2)
-            
-            # 2. Проигрываем звуковой сигнал начала записи
-            if self.beep_sound_path and os.path.exists(self.beep_sound_path):
-                try:
-                    print("Воспроизведение сигнала beep...")
-                    subprocess.run(["aplay", self.beep_sound_path], check=False)
-                    # Небольшая пауза после звукового сигнала
-                    time.sleep(0.5)
-                except Exception as e:
-                    print(f"Ошибка при воспроизведении сигнала: {e}")
-            
-            # 3. Теперь начинаем запись
-            print("Запуск записи...")
-            if self.recorder.start_recording(folder):
-                print("Запись успешно начата")
-                return True
-            else:
-                # Озвучиваем сообщение об ошибке
-                self.play_notification("Не удалось начать запись")
+            if self.debug:
+                print(f"\n*** НАЧАЛО ЗАПИСИ В ПАПКУ {folder} ***")
+                
+            if folder not in ['A', 'B', 'C']:
+                if self.debug:
+                    print(f"Неверная папка для записи: {folder}")
                 return False
                 
+            # Проверяем текущее состояние
+            if self.recorder and self.recorder.is_recording():
+                if self.debug:
+                    print("Запись уже ведется, нельзя начать новую")
+                return False
+                
+            # Создаем папку, если она не существует
+            folder_path = os.path.join(self.base_dir, folder)
+            try:
+                if not os.path.exists(folder_path):
+                    os.makedirs(folder_path, exist_ok=True)
+                    if self.debug:
+                        print(f"Создана папка: {folder_path}")
+            except Exception as dir_error:
+                print(f"Ошибка при создании папки {folder_path}: {dir_error}")
+                sentry_sdk.capture_exception(dir_error)
+                return False
+                
+            # Создаем рекордер, если его нет
+            if not self.recorder:
+                self.recorder = AudioRecorder(folder_path, debug=self.debug)
+                
+            # Озвучиваем начало записи
+            voice_id = self.settings_manager.get_voice() if hasattr(self, 'settings_manager') else None
+            message = f"Начинаем запись в папку {folder}"
+            
+            try:
+                # Озвучиваем через TTS если доступен
+                if self.tts_manager:
+                    try:
+                        if hasattr(self.tts_manager, 'play_speech_blocking'):
+                            self.tts_manager.play_speech_blocking(message, voice_id=voice_id)
+                        else:
+                            self.tts_manager.play_speech(message)
+                            time.sleep(1.5)  # Пауза для завершения воспроизведения
+                    except Exception as tts_error:
+                        print(f"Ошибка при озвучивании начала записи: {tts_error}")
+                        sentry_sdk.capture_exception(tts_error)
+                        # Пробуем запасной вариант
+                        try:
+                            self.play_notification(message)
+                            time.sleep(1)
+                        except:
+                            # Если ничего не помогло, просто продолжаем
+                            pass
+            except Exception as voice_error:
+                print(f"Ошибка при подготовке голосового сообщения: {voice_error}")
+                sentry_sdk.capture_exception(voice_error)
+                
+            # Воспроизводим звуковой сигнал перед началом записи
+            try:
+                if os.path.exists(self.beep_sound_path):
+                    if self.debug:
+                        print("Воспроизведение звукового сигнала...")
+                    subprocess.run(["aplay", self.beep_sound_path], 
+                                  check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    time.sleep(0.3)  # Небольшая пауза после сигнала
+            except Exception as beep_error:
+                print(f"Ошибка при воспроизведении звукового сигнала: {beep_error}")
+                sentry_sdk.capture_exception(beep_error)
+                
+            # Начинаем запись
+            if self.debug:
+                print(f"Запуск записи в папку {folder}...")
+                
+            result = self.recorder.start_recording(folder_path)
+            
+            if result:
+                if self.debug:
+                    print("Запись успешно начата")
+                    
+                # Обновляем интерфейс
+                if self.update_callback:
+                    try:
+                        self.update_callback()
+                    except Exception as callback_error:
+                        print(f"Ошибка при обновлении интерфейса: {callback_error}")
+                        sentry_sdk.capture_exception(callback_error)
+                        
+                return True
+            else:
+                if self.debug:
+                    print("Не удалось начать запись")
+                    
+                # Сообщаем об ошибке
+                try:
+                    self.play_notification("Ошибка при начале записи")
+                except:
+                    pass
+                    
+                return False
         except Exception as e:
-            error_msg = f"Ошибка при начале записи: {e}"
+            error_msg = f"Критическая ошибка при начале записи: {e}"
             print(error_msg)
             sentry_sdk.capture_exception(e)
             return False
     
     def play_notification(self, message):
         """
-        Воспроизводит голосовое уведомление
+        Воспроизводит уведомление с использованием aplay
         
         Args:
-            message (str): Текст уведомления
+            message (str): Текст сообщения
+            
+        Returns:
+            bool: True если успешно, False в случае ошибки
         """
         try:
+            if self.debug:
+                print(f"Воспроизведение уведомления: {message}")
+                
+            if not message:
+                return False
+                
+            # Если TTS доступен, пытаемся использовать его
             if self.tts_manager:
-                # Получаем мужской голос из настроек (ru-RU-Standard-D)
-                voice_id = "ru-RU-Standard-D"
-                print(f"Воспроизведение уведомления голосом: {voice_id}")
-                self.tts_manager.speak_text(message, voice_id)
-            else:
-                # Если TTS недоступен, используем aplay для воспроизведения звука
-                print(f"Уведомление: {message}")
+                try:
+                    # Используем текущий голос, если есть доступ к настройкам
+                    voice_id = self.settings_manager.get_voice() if hasattr(self, 'settings_manager') else None
+                    
+                    self.tts_manager.speak_text(message, voice_id)
+                    return True
+                except Exception as tts_error:
+                    print(f"Ошибка при использовании TTS: {tts_error}")
+                    sentry_sdk.capture_exception(tts_error)
+                    # Продолжаем выполнение, попробуем aplay
+            
+            # Если TTS недоступен, используем aplay для воспроизведения звука
+            try:
+                subprocess.run(["aplay", "/home/aleks/main-sounds/beep.wav"], 
+                               check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                return True
+            except Exception as sound_error:
+                print(f"Ошибка при воспроизведении звука: {sound_error}")
+                sentry_sdk.capture_exception(sound_error)
+                return False
         except Exception as e:
             error_msg = f"Ошибка при воспроизведении уведомления: {e}"
             print(error_msg)
             sentry_sdk.capture_exception(e)
-            
-            # Запасной вариант - напрямую через aplay
-            try:
-                # Создаем временный текстовый файл с сообщением
-                with open("/tmp/notification.txt", "w") as f:
-                    f.write(message)
-                # Используем espeak для преобразования текста в речь
-                subprocess.run(["espeak", "-f", "/tmp/notification.txt", "-v", "ru"], check=False)
-            except Exception as inner_e:
-                print(f"Критическая ошибка при воспроизведении уведомления: {inner_e}")
-                
+            return False
+    
     def pause_recording(self):
         """
         Приостанавливает запись
         
         Returns:
-            bool: True, если запись успешно приостановлена
+            bool: True если запись успешно приостановлена, False в случае ошибки
         """
-        if not self.recorder.is_active() or self.recorder.is_on_pause():
-            if self.debug:
-                print("Невозможно приостановить запись: запись неактивна или уже на паузе")
-            return False
-            
-        # Сначала приостанавливаем запись
-        result = self.recorder.pause_recording()
-        
-        if result:
-            # Затем озвучиваем приостановку
-            if self.debug:
-                print("Воспроизведение сообщения 'Запись приостановлена'...")
-            self.tts_manager.play_speech("Запись приостановлена")
-            
-            if self.update_callback:
-                self.update_callback()
+        try:
+            if not self.recorder:
+                if self.debug:
+                    print("Нет активной записи для приостановки")
+                return False
                 
-        return result
+            if not self.recorder.is_recording():
+                if self.debug:
+                    print("Запись не ведется, нечего приостанавливать")
+                return False
+                
+            if self.recorder.is_paused():
+                if self.debug:
+                    print("Запись уже на паузе")
+                return True
+                
+            if self.debug:
+                print("Приостанавливаем запись")
+                
+            # Приостанавливаем запись
+            result = self.recorder.pause_recording()
+            
+            if result:
+                # Воспроизводим звуковой сигнал паузы
+                try:
+                    subprocess.run(["aplay", "/home/aleks/main-sounds/pause.wav"], 
+                                   check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                except Exception as sound_error:
+                    print(f"Ошибка при воспроизведении звука паузы: {sound_error}")
+                    sentry_sdk.capture_exception(sound_error)
+                
+                # Озвучиваем паузу, если TTS доступен
+                if self.tts_manager:
+                    try:
+                        self.tts_manager.play_speech("Запись приостановлена")
+                    except Exception as tts_error:
+                        print(f"Ошибка при озвучивании паузы: {tts_error}")
+                        sentry_sdk.capture_exception(tts_error)
+                
+                # Обновляем интерфейс
+                if self.update_callback:
+                    try:
+                        self.update_callback()
+                    except Exception as callback_error:
+                        print(f"Ошибка при обновлении интерфейса: {callback_error}")
+                        sentry_sdk.capture_exception(callback_error)
+                
+                return True
+            else:
+                print("Не удалось приостановить запись")
+                return False
+        except Exception as e:
+            error_msg = f"Ошибка при приостановке записи: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return False
     
     def resume_recording(self):
         """
-        Возобновляет запись после паузы
+        Возобновляет приостановленную запись
         
         Returns:
-            bool: True, если запись успешно возобновлена
+            bool: True если запись успешно возобновлена, False в случае ошибки
         """
-        if not self.recorder.is_active() or not self.recorder.is_on_pause():
-            if self.debug:
-                print("Невозможно возобновить запись: запись неактивна или не на паузе")
-            return False
-        
         try:
-            # Сначала озвучиваем возобновление записи
+            if not self.recorder:
+                if self.debug:
+                    print("Нет активной записи для возобновления")
+                return False
+                
+            if not self.recorder.is_recording() or not self.recorder.is_paused():
+                if self.debug:
+                    print("Запись не приостановлена, нечего возобновлять")
+                return False
+                
             if self.debug:
-                print("Воспроизведение сообщения 'Запись возобновлена'...")
+                print("Возобновляем запись")
+                
+            # Возобновляем запись
+            result = self.recorder.resume_recording()
             
-            # Используем subprocess для блокирующего воспроизведения звука
-            if hasattr(self.tts_manager, 'get_cached_filename'):
-                sound_file = self.tts_manager.get_cached_filename("Запись возобновлена", voice=None)
-                if sound_file and os.path.exists(sound_file):
-                    if self.debug:
-                        print(f"Воспроизведение звукового файла: {sound_file}")
-                    subprocess.run(["aplay", "-q", sound_file], 
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    time.sleep(0.5)  # Дополнительная задержка для надежности
-                else:
-                    # Если файл не найден, используем обычный метод
-                    self.tts_manager.play_speech("Запись возобновлена")
-                    time.sleep(1.5)  # Ждем, чтобы сообщение точно проиграло
+            if result:
+                # Воспроизводим звук возобновления
+                try:
+                    # Пытаемся найти звуковой файл в кэше TTS
+                    sound_file = None
+                    if hasattr(self.tts_manager, 'get_cached_filename'):
+                        sound_file = self.tts_manager.get_cached_filename("Запись возобновлена", voice=None)
+                        
+                    # Если файл существует, воспроизводим его
+                    if sound_file and os.path.exists(sound_file):
+                        try:
+                            subprocess.run(["aplay", sound_file], 
+                                          check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        except Exception as sound_error:
+                            print(f"Ошибка при воспроизведении звука возобновления: {sound_error}")
+                            sentry_sdk.capture_exception(sound_error)
+                    else:
+                        # Иначе пытаемся озвучить текст
+                        if self.tts_manager:
+                            try:
+                                self.tts_manager.play_speech("Запись возобновлена")
+                            except Exception as tts_error:
+                                print(f"Ошибка при озвучивании возобновления: {tts_error}")
+                                sentry_sdk.capture_exception(tts_error)
+                                # Пробуем запасной вариант
+                                try:
+                                    self.play_notification("Запись возобновлена")
+                                except:
+                                    # Ничего не делаем, все методы уже не работают
+                                    pass
+                except Exception as notification_error:
+                    print(f"Ошибка при уведомлении о возобновлении: {notification_error}")
+                    sentry_sdk.capture_exception(notification_error)
+                
+                # Обновляем интерфейс
+                if self.update_callback:
+                    try:
+                        self.update_callback()
+                    except Exception as callback_error:
+                        print(f"Ошибка при обновлении интерфейса: {callback_error}")
+                        sentry_sdk.capture_exception(callback_error)
+                
+                return True
             else:
-                # Если метод get_cached_filename отсутствует, используем обычный метод
-                self.tts_manager.play_speech("Запись возобновлена")
-                time.sleep(1.5)  # Ждем, чтобы сообщение точно проиграло
-        except Exception as e:
-            if self.debug:
-                print(f"Ошибка при воспроизведении сообщения: {e}")
-            time.sleep(1)  # На всякий случай подождем
-        
-        # Воспроизводим звуковой сигнал перед возобновлением записи
-        if os.path.exists(self.beep_sound_path):
-            try:
-                if self.debug:
-                    print("Воспроизведение звукового сигнала...")
-                subprocess.run(["aplay", "-q", self.beep_sound_path], 
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                
-                # Добавляем паузу после звукового сигнала перед возобновлением записи
-                if self.debug:
-                    print(f"Пауза 0.3 секунды после звукового сигнала...")
-                time.sleep(0.3)
-                
-            except Exception as e:
-                if self.debug:
-                    print(f"Ошибка при воспроизведении звукового сигнала: {e}")
-        
-        # Теперь возобновляем запись
-        if self.debug:
-            print("Возобновление записи...")
-        result = self.recorder.resume_recording()
-        
-        if result:
-            if self.debug:
-                print("Запись успешно возобновлена")
-        else:
-            if self.debug:
                 print("Не удалось возобновить запись")
-            
-        if result and self.update_callback:
-            self.update_callback()
-                
-        return result
+                return False
+        except Exception as e:
+            error_msg = f"Ошибка при возобновлении записи: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return False
     
     def stop_recording(self):
         """
-        Останавливает запись и сохраняет файл
+        Останавливает запись и сохраняет результат
         
         Returns:
             str: Путь к сохраненному файлу или None в случае ошибки
         """
         try:
-            if not self.recorder.is_active():
-                print("Попытка остановить запись, но запись не активна")
+            if not self.recorder:
+                if self.debug:
+                    print("Нет активной записи для остановки")
                 return None
-            
-            # Получаем текущую папку для записи
+                
+            if not self.recorder.is_recording():
+                if self.debug:
+                    print("Запись не ведется, нечего останавливать")
+                return None
+                
+            if self.debug:
+                print("\n*** ОСТАНОВКА ЗАПИСИ В RECORDER_MANAGER ***")
+                
+            # Получаем текущую папку для озвучивания в сообщении
             folder = self.recorder.get_current_folder()
             
             # ЭТАП 1: Озвучиваем завершение записи
             print("Воспроизведение сообщения 'Запись завершается'...")
             try:
+                # Получаем текущий голос из настроек
+                voice = self.settings_manager.get_voice() if hasattr(self, 'settings_manager') else None
+                
                 # Используем самый надежный метод воспроизведения
                 if hasattr(self.tts_manager, 'play_speech_blocking'):
-                    self.tts_manager.play_speech_blocking("Запись завершается", voice_id="ru-RU-Standard-D")
+                    self.tts_manager.play_speech_blocking("Запись завершается", voice_id=voice)
                 else:
                     self.play_notification("Запись завершается")
                     time.sleep(1)  # Дополнительная пауза
             except Exception as e:
                 print(f"Ошибка при озвучивании завершения записи: {e}")
+                sentry_sdk.capture_exception(e)
                 # Продолжаем несмотря на ошибку
                 
             # ЭТАП 2: Воспроизводим звуковой сигнал остановки
@@ -320,6 +450,7 @@ class RecorderManager:
                 time.sleep(0.5)  # Небольшая пауза
             except Exception as e:
                 print(f"Ошибка при воспроизведении звука остановки: {e}")
+                sentry_sdk.capture_exception(e)
                 
             # ЭТАП 3: Останавливаем запись
             print("Останавливаем и сохраняем запись...")
@@ -337,45 +468,61 @@ class RecorderManager:
                     time.sleep(0.5)  # Небольшая пауза
                 except Exception as e:
                     print(f"Ошибка при воспроизведении звука сохранения: {e}")
+                    sentry_sdk.capture_exception(e)
                 
                 # ЭТАП 6: Озвучиваем подтверждение сохранения
                 message = f"Запись сохранена в папке {folder}"
                 print(f"Воспроизведение сообщения '{message}'...")
                 try:
+                    # Получаем текущий голос из настроек
+                    voice = self.settings_manager.get_voice() if hasattr(self, 'settings_manager') else None
+                    
                     # Используем самый надежный метод воспроизведения
                     if hasattr(self.tts_manager, 'play_speech_blocking'):
-                        self.tts_manager.play_speech_blocking(message, voice_id="ru-RU-Standard-D")
+                        self.tts_manager.play_speech_blocking(message, voice_id=voice)
                     else:
                         self.play_notification(message)
                         time.sleep(1)  # Дополнительная пауза
                 except Exception as e:
                     print(f"Ошибка при озвучивании подтверждения: {e}")
+                    sentry_sdk.capture_exception(e)
                 
                 # Обновляем интерфейс
                 if self.update_callback:
-                    self.update_callback()
+                    try:
+                        self.update_callback()
+                    except Exception as e:
+                        print(f"Ошибка при обновлении интерфейса: {e}")
+                        sentry_sdk.capture_exception(e)
                 
                 return file_path
             else:
                 print("Ошибка: Не удалось сохранить запись")
                 try:
+                    # Получаем текущий голос из настроек
+                    voice = self.settings_manager.get_voice() if hasattr(self, 'settings_manager') else None
+                    
                     # Используем самый надежный метод воспроизведения
                     if hasattr(self.tts_manager, 'play_speech_blocking'):
-                        self.tts_manager.play_speech_blocking("Ошибка при сохранении записи", voice_id="ru-RU-Standard-D")
+                        self.tts_manager.play_speech_blocking("Ошибка при сохранении записи", voice_id=voice)
                     else:
                         self.play_notification("Ошибка при сохранении записи")
+                        time.sleep(1)  # Пауза для воспроизведения
                 except Exception as e:
-                    print(f"Ошибка при озвучивании сообщения об ошибке: {e}")
-                return None
+                    print(f"Ошибка при озвучивании ошибки сохранения: {e}")
+                    sentry_sdk.capture_exception(e)
                 
+                return None
         except Exception as e:
             error_msg = f"Критическая ошибка при остановке записи: {e}"
             print(error_msg)
             sentry_sdk.capture_exception(e)
             
-            # Пытаемся вернуть интерфейс в исходное состояние
-            if self.update_callback:
-                self.update_callback()
+            # В случае критической ошибки все равно пытаемся остановить запись без обработки результата
+            try:
+                self.recorder.stop_recording()
+            except:
+                pass
                 
             return None
     

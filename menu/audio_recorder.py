@@ -55,22 +55,21 @@ class AudioRecorder:
             print("AudioRecorder инициализирован")
         
     def _create_base_directories(self):
-        """Создаёт базовую директорию и поддиректории A, B, C для записей"""
+        """Создает базовые директории для записей, если они не существуют"""
         try:
-            if not os.path.exists(self.base_dir):
-                if self.debug:
-                    print(f"Создаём директорию для записей: {self.base_dir}")
-                os.makedirs(self.base_dir)
-                
-            # Создаём поддиректории A, B, C
-            for folder in ['A', 'B', 'C']:
+            # Создаем базовую директорию, если она не существует
+            os.makedirs(self.base_dir, exist_ok=True)
+            
+            # Создаем стандартные директории для категорий
+            standard_folders = ["Заметки", "Идеи", "Важное", "Работа", "Личное"]
+            for folder in standard_folders:
                 folder_path = os.path.join(self.base_dir, folder)
-                if not os.path.exists(folder_path):
-                    if self.debug:
-                        print(f"Создаём директорию: {folder_path}")
-                    os.makedirs(folder_path)
+                os.makedirs(folder_path, exist_ok=True)
+                
+            if self.debug:
+                print(f"Созданы базовые директории в {self.base_dir}")
         except Exception as e:
-            error_msg = f"Ошибка при создании директорий: {e}"
+            error_msg = f"Ошибка при создании базовых директорий: {e}"
             print(error_msg)
             sentry_sdk.capture_exception(e)
     

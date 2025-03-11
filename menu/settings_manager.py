@@ -141,7 +141,13 @@ class SettingsManager:
         Returns:
             str: Путь к файлу
         """
-        return self.settings["google_cloud_credentials"]
+        try:
+            return self.settings["google_cloud_credentials"]
+        except Exception as e:
+            error_msg = f"Ошибка при получении учетных данных Google Cloud: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return None
     
     def set_google_cloud_credentials(self, credentials_file):
         """
@@ -153,11 +159,23 @@ class SettingsManager:
         Returns:
             bool: True если успешно, иначе False
         """
-        if os.path.exists(credentials_file):
-            self.settings["google_cloud_credentials"] = credentials_file
-            self.save_settings()
-            return True
-        return False
+        try:
+            if os.path.exists(credentials_file):
+                self.settings["google_cloud_credentials"] = credentials_file
+                self.save_settings()
+                
+                if self.debug:
+                    print(f"Установлены учетные данные Google Cloud: {credentials_file}")
+                return True
+            else:
+                if self.debug:
+                    print(f"Файл учетных данных не существует: {credentials_file}")
+                return False
+        except Exception as e:
+            error_msg = f"Ошибка при установке учетных данных Google Cloud: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return False
     
     def get_available_voices(self):
         """

@@ -100,6 +100,7 @@ class TTSManager:
                     print("Импорт успешен!")
                 except ImportError as e:
                     print(f"Ошибка импорта из текущего пакета: {e}")
+                    sentry_sdk.capture_exception(e)
                     # Попробуем альтернативный метод импорта
                     try:
                         print("Пробуем альтернативный метод импорта")
@@ -114,6 +115,7 @@ class TTSManager:
                         print("Альтернативный импорт успешен!")
                     except Exception as e:
                         print(f"Ошибка альтернативного импорта: {e}")
+                        sentry_sdk.capture_exception(e)
                         raise
                 
                 # Получаем путь к файлу с учетными данными
@@ -144,6 +146,7 @@ class TTSManager:
             import traceback
             print("Стек вызовов:")
             traceback.print_exc()
+            sentry_sdk.capture_exception(e)
             # Переключаемся на gTTS
             self.tts_engine = "gtts"
             if self.settings_manager:
@@ -206,8 +209,10 @@ class TTSManager:
                 with open(self.stats_file, 'r') as f:
                     self.stats = json.load(f)
             except Exception as e:
+                error_msg = f"Ошибка при загрузке статистики: {e}"
                 if self.debug:
-                    print(f"Ошибка при загрузке статистики: {e}")
+                    print(error_msg)
+                sentry_sdk.capture_exception(e)
                 
     def _save_stats(self):
         """Сохраняет статистику в файл"""
@@ -215,8 +220,10 @@ class TTSManager:
             with open(self.stats_file, 'w') as f:
                 json.dump(self.stats, f, indent=2)
         except Exception as e:
+            error_msg = f"Ошибка при сохранении статистики: {e}"
             if self.debug:
-                print(f"Ошибка при сохранении статистики: {e}")
+                print(error_msg)
+            sentry_sdk.capture_exception(e)
                 
     def _update_day_counter(self):
         """Обновляет счетчик дневных запросов"""

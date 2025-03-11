@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import sentry_sdk
 
 class MenuItem:
     """Базовый класс для пунктов меню"""
@@ -12,20 +13,37 @@ class MenuItem:
             action (callable, optional): Функция, которая будет вызвана при выборе пункта меню
             speech_text (str, optional): Текст для озвучки, если отличается от name
         """
-        self.name = name
-        self.action = action
-        # Если текст для озвучки не указан, используем название пункта
-        self.speech_text = speech_text if speech_text else name
+        try:
+            self.name = name
+            self.action = action
+            # Если текст для озвучки не указан, используем название пункта
+            self.speech_text = speech_text if speech_text else name
+        except Exception as e:
+            error_msg = f"Ошибка при инициализации MenuItem: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
     
     def select(self):
         """Вызывается при выборе пункта меню"""
-        if self.action:
-            return self.action()
-        return None
+        try:
+            if self.action:
+                return self.action()
+            return None
+        except Exception as e:
+            error_msg = f"Ошибка при выборе пункта меню '{self.name}': {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return None
     
     def get_speech_text(self):
         """Возвращает текст для озвучки"""
-        return self.speech_text
+        try:
+            return self.speech_text
+        except Exception as e:
+            error_msg = f"Ошибка при получении текста для озвучки: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return self.name if hasattr(self, 'name') else "Ошибка"
 
 
 class SubMenu(MenuItem):
@@ -40,40 +58,72 @@ class SubMenu(MenuItem):
             parent (SubMenu, optional): Родительское меню
             speech_text (str, optional): Текст для озвучки, если отличается от name
         """
-        super().__init__(name, None, speech_text)
-        self.parent = parent
-        self.items = []
-        self.current_selection = 0
+        try:
+            super().__init__(name, None, speech_text)
+            self.parent = parent
+            self.items = []
+            self.current_selection = 0
+        except Exception as e:
+            error_msg = f"Ошибка при инициализации SubMenu: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
     
     def add_item(self, item):
         """Добавляет пункт меню в подменю"""
-        self.items.append(item)
-        if isinstance(item, SubMenu):
-            item.parent = self
+        try:
+            self.items.append(item)
+            if isinstance(item, SubMenu):
+                item.parent = self
+        except Exception as e:
+            error_msg = f"Ошибка при добавлении пункта меню: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
     
     def select(self):
         """Вызывается при выборе подменю"""
-        # При выборе подменю мы просто возвращаем его самого,
-        # чтобы менеджер меню мог переключиться на него
-        return self
+        try:
+            # При выборе подменю мы просто возвращаем его самого,
+            # чтобы менеджер меню мог переключиться на него
+            return self
+        except Exception as e:
+            error_msg = f"Ошибка при выборе подменю '{self.name}': {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return None
     
     def get_current_item(self):
         """Возвращает текущий выбранный пункт меню"""
-        if not self.items:
+        try:
+            if not self.items:
+                return None
+            return self.items[self.current_selection]
+        except Exception as e:
+            error_msg = f"Ошибка при получении текущего пункта меню: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
             return None
-        return self.items[self.current_selection]
     
     def move_up(self):
         """Перемещение вверх по списку пунктов меню (циклически)"""
-        if not self.items:
-            return
-        self.current_selection = (self.current_selection - 1) % len(self.items)
+        try:
+            if not self.items:
+                return
+            self.current_selection = (self.current_selection - 1) % len(self.items)
+        except Exception as e:
+            error_msg = f"Ошибка при перемещении вверх по меню: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
     
     def move_down(self):
         """Перемещение вниз по списку пунктов меню (циклически)"""
-        if not self.items:
-            return
-        self.current_selection = (self.current_selection + 1) % len(self.items)
+        try:
+            if not self.items:
+                return
+            self.current_selection = (self.current_selection + 1) % len(self.items)
+        except Exception as e:
+            error_msg = f"Ошибка при перемещении вниз по меню: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
 
 # Добавляем псевдоним для SubMenu, чтобы исправить импорты
 Menu = SubMenu
