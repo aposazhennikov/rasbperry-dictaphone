@@ -505,7 +505,14 @@ class PlaybackManager:
                 # Возобновляем воспроизведение с текущей позиции
                 if self.debug:
                     print("Возобновление воспроизведения")
-                    print(f"Текущая позиция: {self.player.get_position()} / {self.player.get_duration()}")
+                    try:
+                        # Используем правильные методы для получения позиции и длительности
+                        position = self.player.get_current_position() if hasattr(self.player, 'get_current_position') else 0
+                        duration = self.player.get_duration() if hasattr(self.player, 'get_duration') else 0
+                        print(f"Текущая позиция: {position} / {duration}")
+                    except Exception as pos_error:
+                        print(f"Ошибка при получении позиции: {pos_error}")
+                        sentry_sdk.capture_exception(pos_error)
                 
                 # !!! Важно: НЕ озвучиваем возобновление при снятии с паузы,
                 # чтобы избежать проблемы с перезапуском файла из-за озвучки
@@ -529,7 +536,14 @@ class PlaybackManager:
                 # Приостанавливаем воспроизведение
                 if self.debug:
                     print("Приостановка воспроизведения")
-                    print(f"Текущая позиция: {self.player.get_position()} / {self.player.get_duration()}")
+                    try:
+                        # Используем правильные методы для получения позиции и длительности
+                        position = self.player.get_current_position() if hasattr(self.player, 'get_current_position') else 0
+                        duration = self.player.get_duration() if hasattr(self.player, 'get_duration') else 0
+                        print(f"Текущая позиция: {position} / {duration}")
+                    except Exception as pos_error:
+                        print(f"Ошибка при получении позиции: {pos_error}")
+                        sentry_sdk.capture_exception(pos_error)
                 
                 # Сначала приостанавливаем воспроизведение, а потом озвучиваем системное сообщение
                 result = self.player.pause()
@@ -581,9 +595,14 @@ class PlaybackManager:
                 return False
             
             # Получаем текущую позицию до возобновления
-            current_position = self.player.get_position()
-            if self.debug:
-                print(f"Текущая позиция перед возобновлением: {current_position}")
+            try:
+                current_position = self.player.get_current_position() if hasattr(self.player, 'get_current_position') else 0
+                if self.debug:
+                    print(f"Текущая позиция перед возобновлением: {current_position}")
+            except Exception as pos_error:
+                print(f"Ошибка при получении позиции: {pos_error}")
+                sentry_sdk.capture_exception(pos_error)
+                current_position = 0
                 
             # Возобновляем воспроизведение
             result = self.player.resume()

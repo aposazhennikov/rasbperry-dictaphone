@@ -307,9 +307,16 @@ class AudioPlayer:
             if self.debug:
                 print("\n*** ПАУЗА ВОСПРОИЗВЕДЕНИЯ В AUDIO_PLAYER ***")
                 
-            if not self.is_playing or self.is_paused:
+            # Если воспроизведение уже на паузе, просто возвращаем True
+            if self.is_paused:
                 if self.debug:
-                    print("Воспроизведение уже на паузе или остановлено")
+                    print("Воспроизведение уже на паузе")
+                return True
+                
+            # Если воспроизведение не активно, возвращаем False
+            if not self.is_playing:
+                if self.debug:
+                    print("Невозможно поставить на паузу: воспроизведение не активно")
                 return False
                 
             if self.debug:
@@ -364,13 +371,20 @@ class AudioPlayer:
             
             if self.debug:
                 print(f"Воспроизведение успешно приостановлено на позиции {self.position:.2f} сек")
-                
+            
+            # Явно проверяем, что установлен флаг паузы перед возвратом
+            if not self.is_paused:
+                if self.debug:
+                    print("Принудительно устанавливаем флаг is_paused=True")
+                self.is_paused = True
+            
             return True
         except Exception as e:
             print(f"Критическая ошибка при постановке на паузу: {e}")
             sentry_sdk.capture_exception(e)
             
-            # В случае ошибки всё равно пытаемся остановить воспроизведение
+            # В случае ошибки все равно пытаемся остановить воспроизведение
+            # и установить правильные флаги
             self.is_paused = True
             self.is_playing = False
             self.playback_process = None

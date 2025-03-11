@@ -1325,39 +1325,145 @@ class MenuManager:
         if not self.playback_state["active"]:
             if self.debug:
                 print("Попытка поставить на паузу, но воспроизведение не активно")
-            return
+            return False
         
         try:
+            print("\n*** ПЕРЕКЛЮЧЕНИЕ ПАУЗЫ ВОСПРОИЗВЕДЕНИЯ ***")
+            
+            # Проверяем состояние воспроизведения и паузы
+            is_paused = self.playback_state["paused"]
+            
             if self.debug:
-                print(f"Переключаем паузу воспроизведения. Текущее состояние: {self.playback_state['paused']}")
+                print(f"Переключаем паузу воспроизведения. Текущее состояние паузы: {is_paused}")
             
-            # Переключаем паузу
-            success = self.playback_manager.toggle_pause()
+            # Пробуем несколько способов переключения паузы
+            toggle_success = False
             
-            # Проверяем успешность операции
-            if success:
-                # Получаем обновленное состояние паузы
-                is_paused = self.playback_state["paused"]
+            # 1. Пробуем через playback_manager.toggle_pause()
+            try:
+                if self.debug:
+                    print("ПОПЫТКА 1: Переключение через playback_manager.toggle_pause()")
+                success = self.playback_manager.toggle_pause()
+                if success:
+                    toggle_success = True
+                    if self.debug:
+                        print("ПОПЫТКА 1: Успешно")
+                else:
+                    if self.debug:
+                        print("ПОПЫТКА 1: Не удалось")
+            except Exception as e:
+                print(f"Ошибка при переключении паузы через playback_manager: {e}")
+                sentry_sdk.capture_exception(e)
+            
+            # 2. Если не сработало, пробуем напрямую через AudioPlayer
+            if not toggle_success and hasattr(self.playback_manager, 'player'):
+                try:
+                    if self.debug:
+                        print("ПОПЫТКА 2: Переключение напрямую через player.pause() или player.resume()")
+                    
+                    player = self.playback_manager.player
+                    if is_paused:
+                        # Возобновляем воспроизведение
+                        if hasattr(player, 'resume'):
+                            if self.debug:
+                                print("Вызываем player.resume()")
+                            result = player.resume()
+                            if result:
+                                self.playback_state["paused"] = False
+                                toggle_success = True
+                                if self.debug:
+                                    print("ПОПЫТКА 2: Успешное возобновление")
+                    else:
+                        # Ставим на паузу
+                        if hasattr(player, 'pause'):
+                            if self.debug:
+                                print("Вызываем player.pause()")
+                            result = player.pause()
+                            if result:
+                                self.playback_state["paused"] = True
+                                toggle_success = True
+                                if self.debug:
+                                    print("ПОПЫТКА 2: Успешная постановка на паузу")
+                except Exception as e:
+                    print(f"Ошибка при прямом переключении паузы: {e}")
+                    sentry_sdk.capture_exception(e)
+            
+            # 3. Если предыдущие попытки не сработали, принудительно меняем состояние
+            if not toggle_success:
+                try:
+                    if self.debug:
+                        print("ПОПЫТКА 3: Принудительное переключение состояния")
+                    
+                    # Инвертируем состояние паузы
+                    new_paused_state = not is_paused
+                    self.playback_state["paused"] = new_paused_state
+                    
+                    # Вызываем соответствующие методы AudioPlayer в зависимости от нового состояния
+                    if hasattr(self.playback_manager, 'player'):
+                        player = self.playback_manager.player
+                        if new_paused_state:
+                            # Ставим на паузу
+                            if hasattr(player, 'pause'):
+                                player.pause()
+                        else:
+                            # Возобновляем
+                            if hasattr(player, 'resume'):
+                                player.resume()
+                    
+                    toggle_success = True
+                    if self.debug:
+                        print(f"ПОПЫТКА 3: Успешно принудительно установили состояние паузы: {new_paused_state}")
+                except Exception as e:
+                    print(f"Ошибка при принудительном переключении паузы: {e}")
+                    sentry_sdk.capture_exception(e)
+            
+            # Проверяем успешность операции и выводим системное сообщение при необходимости
+            if toggle_success:
+                # Получаем текущее состояние паузы после всех операций
+                current_paused_state = self.playback_state["paused"]
                 
-                # Если мы возобновляем воспроизведение (снимаем с паузы), то НЕ озвучиваем сообщение
-                if not is_paused:
-                    # Воспроизведение возобновлено, НЕ нужно озвучивать
+                if self.debug:
+                    print(f"Итоговое состояние паузы: {current_paused_state}")
+                
+                # Озвучиваем системное сообщение только когда ставим на паузу
+                if current_paused_state:
+                    if self.debug:
+                        print("Воспроизведение на паузе - озвучиваем системное сообщение")
+                    
+                    # Проверяем доступность TTS и озвучиваем сообщение
+                    if self.tts_enabled and self.tts_manager:
+                        voice = self.settings_manager.get_voice()
+                        try:
+                            if hasattr(self.tts_manager, 'play_speech_blocking'):
+                                self.tts_manager.play_speech_blocking("Пауза", voice_id=voice)
+                            else:
+                                self.tts_manager.play_speech("Пауза", voice_id=voice)
+                                time.sleep(0.5)
+                        except Exception as e:
+                            print(f"Ошибка при озвучивании паузы: {e}")
+                            sentry_sdk.capture_exception(e)
+                else:
+                    # Воспроизведение возобновлено - не озвучиваем сообщение
                     if self.debug:
                         print("Воспроизведение возобновлено - без системного сообщения")
             else:
                 if self.debug:
-                    print("Не удалось переключить паузу воспроизведения")
+                    print("ОШИБКА: Не удалось переключить паузу воспроизведения всеми доступными способами")
             
             # Отображаем текущий статус воспроизведения
             if self.debug:
                 print(f"Статус воспроизведения: активно={self.playback_state['active']}, " +
                       f"на паузе={self.playback_state['paused']}, " +
                       f"время={self.playback_state['position']} / {self.playback_state['duration']}")
-                
+            
+            # Возвращаем результат операции
+            return toggle_success
+        
         except Exception as e:
             if self.debug:
                 print(f"КРИТИЧЕСКАЯ ОШИБКА при переключении паузы воспроизведения: {e}")
             sentry_sdk.capture_exception(e)
+            return False
     
     def _stop_playback(self):
         """Останавливает воспроизведение и возвращается в меню"""
