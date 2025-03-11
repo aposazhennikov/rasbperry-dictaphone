@@ -88,17 +88,77 @@ class SettingsManager:
         
         Args:
             voice (str): Идентификатор голоса
+            
+        Returns:
+            bool: True если успешно, иначе False
         """
         try:
-            self.settings["voice"] = voice
-            self.save_settings()
+            # Логируем начало процесса
+            sentry_sdk.add_breadcrumb(
+                category="voice",
+                message=f"Settings Manager: Начало установки голоса {voice}",
+                level="info"
+            )
+            print(f"[SETTINGS] Запрос на установку голоса: {voice}")
             
-            if self.debug:
-                print(f"Установлен голос: {voice}")
+            # Получаем текущий голос для логирования
+            current_voice = self.get_voice()
+            print(f"[SETTINGS] Текущий голос в настройках: {current_voice}")
+            
+            # Проверяем, существует ли голос в доступных
+            available_voices = self.get_available_voices()
+            sentry_sdk.add_breadcrumb(
+                category="voice",
+                message=f"Settings Manager: Доступные голоса: {available_voices}",
+                level="info"
+            )
+            print(f"[SETTINGS] Доступные голоса: {available_voices}")
+            
+            if voice not in available_voices:
+                error_msg = f"Settings Manager: Голос {voice} не найден в списке доступных голосов"
+                print(f"[SETTINGS ERROR] {error_msg}")
+                sentry_sdk.capture_message(error_msg, level="error")
+                return False
+                
+            # Устанавливаем голос в настройках
+            old_voice = self.settings.get("voice", "ru-RU-Standard-A")
+            self.settings["voice"] = voice
+            
+            # Сохраняем настройки в файл
+            try:
+                self.save_settings()
+                print(f"[SETTINGS] Настройки сохранены в файл")
+            except Exception as save_error:
+                error_msg = f"Ошибка при сохранении настроек: {save_error}"
+                print(f"[SETTINGS ERROR] {error_msg}")
+                sentry_sdk.capture_exception(save_error)
+                # Восстанавливаем старое значение
+                self.settings["voice"] = old_voice
+                return False
+            
+            # Проверяем, что голос действительно установлен
+            new_voice = self.get_voice()
+            if new_voice != voice:
+                error_msg = f"Settings Manager: Голос не был установлен: ожидалось {voice}, получено {new_voice}"
+                print(f"[SETTINGS ERROR] {error_msg}")
+                sentry_sdk.capture_message(error_msg, level="error")
+                return False
+            
+            print(f"[SETTINGS] Голос успешно установлен: {voice}")
+            
+            # Логируем успешную установку голоса
+            sentry_sdk.add_breadcrumb(
+                category="voice",
+                message=f"Settings Manager: Голос успешно изменен с {old_voice} на {new_voice}",
+                level="info"
+            )
+            
+            return True
         except Exception as e:
-            error_msg = f"Ошибка при установке голоса: {e}"
-            print(error_msg)
+            error_msg = f"Критическая ошибка при установке голоса в настройках: {e}"
+            print(f"[SETTINGS CRITICAL ERROR] {error_msg}")
             sentry_sdk.capture_exception(e)
+            return False
             
     def get_tts_engine(self):
         """

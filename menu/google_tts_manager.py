@@ -228,10 +228,82 @@ class GoogleTTSManager:
         
         Args:
             voice (str): Идентификатор голоса
+            
+        Returns:
+            bool: True если успешно, иначе False
         """
-        self.voice = voice
-        if self.debug:
-            print(f"Установлен голос: {voice}")
+        try:
+            # Логируем начало процесса
+            sentry_sdk.add_breadcrumb(
+                category="voice",
+                message=f"Google TTS Manager: Начало установки голоса {voice}",
+                level="info"
+            )
+            print(f"[GOOGLE TTS] Запрос на установку голоса: {voice}")
+            print(f"[GOOGLE TTS] Текущий голос перед установкой: {self.voice}")
+            
+            # Получаем список доступных голосов
+            try:
+                available_voices = self.get_available_voices()
+                sentry_sdk.add_breadcrumb(
+                    category="voice",
+                    message=f"Google TTS Manager: Доступные голоса: {list(available_voices.keys())}",
+                    level="info"
+                )
+                print(f"[GOOGLE TTS] Доступные голоса: {list(available_voices.keys())}")
+                
+                if voice not in available_voices:
+                    # Проверяем, есть ли голос в стандартном списке
+                    standard_voices = self._get_default_voices()
+                    if voice in standard_voices:
+                        print(f"[GOOGLE TTS] Голос {voice} не найден в API, но есть в стандартном списке")
+                        # Допускаем стандартные голоса, даже если API их не вернул
+                    else:
+                        error_msg = f"Google TTS Manager: Голос {voice} не найден в Google Cloud TTS"
+                        print(f"[GOOGLE TTS ERROR] {error_msg}")
+                        sentry_sdk.capture_message(error_msg, level="error")
+                        return False
+            except Exception as avail_error:
+                error_msg = f"Ошибка при получении списка доступных голосов: {avail_error}"
+                print(f"[GOOGLE TTS WARNING] {error_msg}")
+                sentry_sdk.capture_message(error_msg, level="warning")
+                # Проверяем, есть ли голос в стандартном списке
+                standard_voices = self._get_default_voices()
+                if voice not in standard_voices:
+                    print(f"[GOOGLE TTS ERROR] Голос {voice} не найден в стандартном списке")
+                    return False
+                else:
+                    print(f"[GOOGLE TTS] Голос {voice} найден в стандартном списке")
+            
+            # Сохраняем старый голос для логирования
+            old_voice = self.voice
+                
+            # Устанавливаем новый голос
+            self.voice = voice
+            
+            # Проверяем, сохранился ли голос
+            print(f"[GOOGLE TTS] Голос установлен: {self.voice}")
+            
+            if self.voice != voice:
+                error_msg = f"Google TTS Manager: Голос не был установлен: ожидалось {voice}, получено {self.voice}"
+                print(f"[GOOGLE TTS ERROR] {error_msg}")
+                sentry_sdk.capture_message(error_msg, level="error")
+                return False
+            
+            # Логируем успешную установку голоса
+            sentry_sdk.add_breadcrumb(
+                category="voice",
+                message=f"Google TTS Manager: Голос успешно изменен с {old_voice} на {self.voice}",
+                level="info"
+            )
+            print(f"[GOOGLE TTS] Голос успешно изменен с {old_voice} на {self.voice}")
+                
+            return True
+        except Exception as e:
+            error_msg = f"Критическая ошибка при установке голоса в Google TTS: {e}"
+            print(f"[GOOGLE TTS CRITICAL ERROR] {error_msg}")
+            sentry_sdk.capture_exception(e)
+            return False
     
     def get_available_voices(self):
         """
@@ -241,30 +313,85 @@ class GoogleTTSManager:
             dict: Словарь с доступными голосами {voice_id: name}
         """
         try:
-            # Получаем список голосов для указанного языка
-            response = self.client.list_voices(language_code=self.lang)
-            voices = {}
+            # Логируем начало процесса
+            print(f"[GOOGLE TTS] Запрос на получение списка доступных голосов")
             
-            for voice in response.voices:
-                # Добавляем только голоса для нашего языка
-                if self.lang in voice.language_codes:
-                    # В name содержится полный идентификатор голоса (например, ru-RU-Standard-A)
-                    voices[voice.name] = f"{voice.name} ({voice.ssml_gender.name})"
-            
-            if self.debug:
-                print(f"Получено {len(voices)} голосов для языка {self.lang}")
+            # Проверяем инициализацию клиента
+            if not hasattr(self, 'client') or self.client is None:
+                error_msg = "Google Cloud TTS клиент не инициализирован"
+                print(f"[GOOGLE TTS WARNING] {error_msg}")
+                sentry_sdk.capture_message(error_msg, level="warning")
+                # Возвращаем стандартный список голосов
+                return self._get_default_voices()
                 
-            return voices
+            # Пробуем получить список голосов для указанного языка
+            try:
+                response = self.client.list_voices(language_code=self.lang)
+                voices = {}
+                
+                for voice in response.voices:
+                    # Добавляем только голоса для нашего языка
+                    if self.lang in voice.language_codes:
+                        # Создаем удобное имя для голоса
+                        if "Standard" in voice.name:
+                            name_type = "Стандартный"
+                        elif "WaveNet" in voice.name:
+                            name_type = "WaveNet"
+                        elif "Neural2" in voice.name:
+                            name_type = "Neural2"
+                        elif "Studio" in voice.name:
+                            name_type = "Студийный"
+                        else:
+                            name_type = "Обычный"
+                            
+                        # Определяем пол голоса
+                        if voice.ssml_gender == texttospeech.SsmlVoiceGender.FEMALE:
+                            gender = "женский"
+                        elif voice.ssml_gender == texttospeech.SsmlVoiceGender.MALE:
+                            gender = "мужской"
+                        else:
+                            gender = "нейтральный"
+                            
+                        # Формируем описание голоса
+                        voice_desc = f"{name_type} {gender} ({voice.name})"
+                        voices[voice.name] = voice_desc
+                
+                if not voices:
+                    print(f"[GOOGLE TTS WARNING] Не найдены голоса для языка {self.lang}, возвращаем стандартный список")
+                    return self._get_default_voices()
+                    
+                print(f"[GOOGLE TTS] Успешно получены {len(voices)} голосов из API")
+                return voices
+                
+            except Exception as api_error:
+                error_msg = f"Ошибка при запросе голосов из API: {str(api_error)}"
+                print(f"[GOOGLE TTS WARNING] {error_msg}")
+                sentry_sdk.capture_exception(api_error)
+                # Возвращаем стандартный список голосов
+                return self._get_default_voices()
+                
         except Exception as e:
-            print(f"Ошибка при получении списка голосов: {e}")
-            # Возвращаем базовые голоса если произошла ошибка
-            return {
-                "ru-RU-Standard-A": "Женский голос 1",
-                "ru-RU-Standard-B": "Мужской голос 1",
-                "ru-RU-Standard-C": "Женский голос 2",
-                "ru-RU-Standard-D": "Мужской голос 2",
-                "ru-RU-Standard-E": "Женский голос 3"
-            }
+            error_msg = f"Критическая ошибка при получении списка голосов: {str(e)}"
+            print(f"[GOOGLE TTS ERROR] {error_msg}")
+            sentry_sdk.capture_exception(e)
+            # Возвращаем стандартный список голосов
+            return self._get_default_voices()
+    
+    def _get_default_voices(self):
+        """
+        Возвращает стандартный список голосов, когда API недоступен
+        
+        Returns:
+            dict: Словарь с доступными голосами {voice_id: name}
+        """
+        print(f"[GOOGLE TTS] Возвращаем стандартный список голосов")
+        return {
+            "ru-RU-Standard-A": "Стандартный женский (ru-RU-Standard-A)",
+            "ru-RU-Standard-B": "Стандартный мужской (ru-RU-Standard-B)",
+            "ru-RU-Standard-C": "Стандартный женский (ru-RU-Standard-C)",
+            "ru-RU-Standard-D": "Стандартный мужской (ru-RU-Standard-D)",
+            "ru-RU-Standard-E": "Стандартный женский (ru-RU-Standard-E)"
+        }
     
     def get_cached_filename(self, text, use_wav=None, voice=None):
         """

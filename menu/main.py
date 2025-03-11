@@ -49,10 +49,41 @@ def main():
         
         # Устанавливаем настройки, если они указаны в аргументах
         if args.voice:
-            if args.voice in settings_manager.get_available_voices():
-                settings_manager.set_voice(args.voice)
-                if args.debug:
-                    print(f"Установлен голос: {args.voice}")
+            print(f"[MAIN] Установка голоса из командной строки: {args.voice}")
+            sentry_sdk.add_breadcrumb(
+                category="voice",
+                message=f"Попытка установки голоса из командной строки: {args.voice}",
+                level="info"
+            )
+            
+            available_voices = settings_manager.get_available_voices()
+            print(f"[MAIN] Доступные голоса: {available_voices}")
+            
+            if args.voice in available_voices:
+                # Сохраняем предыдущий голос для логирования
+                previous_voice = settings_manager.get_voice()
+                print(f"[MAIN] Предыдущий голос в настройках: {previous_voice}")
+                
+                # Устанавливаем новый голос
+                result = settings_manager.set_voice(args.voice)
+                print(f"[MAIN] Результат установки голоса в настройках: {result}")
+                
+                # Проверяем установку
+                current_voice = settings_manager.get_voice()
+                print(f"[MAIN] Текущий голос в настройках после установки: {current_voice}")
+                
+                if current_voice != args.voice:
+                    error_msg = f"Голос не был установлен в настройках: ожидался {args.voice}, получен {current_voice}"
+                    print(f"[MAIN ERROR] {error_msg}")
+                    sentry_sdk.capture_message(error_msg, level="error")
+                else:
+                    success_msg = f"Голос успешно установлен из командной строки: {args.voice}"
+                    print(f"[MAIN] {success_msg}")
+                    sentry_sdk.capture_message(success_msg, level="info")
+            else:
+                error_msg = f"Голос {args.voice} не найден в списке доступных голосов"
+                print(f"[MAIN ERROR] {error_msg}")
+                sentry_sdk.capture_message(error_msg, level="error")
         
         # Устанавливаем движок TTS, если указан
         if args.tts_engine:
@@ -82,16 +113,46 @@ def main():
                 print(f"Файл учетных данных Google Cloud: {credentials_file}")
         
         # Создаем менеджер меню
-        menu_manager = MenuManager(
-            tts_enabled=not args.no_tts, 
-            cache_dir=args.cache_dir, 
-            debug=args.debug,
-            use_wav=not args.use_mp3,
-            settings_manager=settings_manager,
-            records_dir=args.records_dir
-        )
+        try:
+            print(f"[MAIN] Создание менеджера меню")
+            print(f"[MAIN] Текущий голос в настройках перед созданием менеджера: {settings_manager.get_voice()}")
+            
+            menu_manager = MenuManager(
+                tts_enabled=not args.no_tts, 
+                cache_dir=args.cache_dir, 
+                debug=args.debug,
+                use_wav=not args.use_mp3,
+                settings_manager=settings_manager,
+                records_dir=args.records_dir
+            )
+            
+            # Проверяем голос в TTSManager после инициализации
+            if hasattr(menu_manager, 'tts_manager') and menu_manager.tts_manager:
+                print(f"[MAIN] Голос в TTS Manager после инициализации: {menu_manager.tts_manager.voice}")
+                sentry_sdk.add_breadcrumb(
+                    category="voice",
+                    message=f"Голос в TTS Manager после инициализации: {menu_manager.tts_manager.voice}",
+                    level="info"
+                )
+                
+                # Если голос в TTS Manager не соответствует настройкам, исправляем
+                if menu_manager.tts_manager.voice != settings_manager.get_voice():
+                    print(f"[MAIN WARNING] Голос в TTS Manager не соответствует настройкам. Исправляем...")
+                    correct_voice = settings_manager.get_voice()
+                    result = menu_manager.tts_manager.set_voice(correct_voice)
+                    print(f"[MAIN] Результат принудительной установки голоса в TTS Manager: {result}")
+                    
+                    # Проверяем, исправлено ли
+                    print(f"[MAIN] Голос в TTS Manager после коррекции: {menu_manager.tts_manager.voice}")
+                    
+        except Exception as mm_error:
+            error_msg = f"Ошибка при создании менеджера меню: {mm_error}"
+            print(f"[MAIN ERROR] {error_msg}")
+            sentry_sdk.capture_exception(mm_error)
+            raise
         
         # Создаем структуру меню
+        print(f"[MAIN] Создание структуры меню")
         menu_manager.create_menu_structure()
         
         # Отображаем текущее меню

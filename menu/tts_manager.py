@@ -30,7 +30,7 @@ class TTSManager:
             tld (str): Домен Google для TTS (com, ru, и т.д.)
             debug (bool): Режим отладки
             use_wav (bool): Использовать WAV вместо MP3 для более быстрого воспроизведения
-            voice (str): Идентификатор голоса для озвучки
+            voice (str): Идентификатор голоса для озвучки (используется только если нет settings_manager)
             settings_manager (SettingsManager): Менеджер настроек
         """
         self.cache_dir = cache_dir
@@ -41,9 +41,30 @@ class TTSManager:
         self.cache_lock = threading.Lock()
         self.debug = debug
         self.use_wav = use_wav
-        self.voice = voice
         self.settings_manager = settings_manager
         self.google_tts_manager = None
+        
+        # Определяем голос - берем из настроек, если доступны, иначе используем значение по умолчанию
+        if self.settings_manager:
+            try:
+                self.voice = self.settings_manager.get_voice()
+                print(f"[TTS INIT] Установлен голос из настроек: {self.voice}")
+                sentry_sdk.add_breadcrumb(
+                    category="voice",
+                    message=f"TTS Manager: Голос установлен из настроек: {self.voice}",
+                    level="info"
+                )
+            except Exception as voice_error:
+                error_msg = f"Ошибка при получении голоса из настроек: {voice_error}"
+                print(f"[TTS INIT ERROR] {error_msg}")
+                sentry_sdk.capture_exception(voice_error)
+                # Используем значение по умолчанию
+                self.voice = voice
+                print(f"[TTS INIT] Используем голос по умолчанию: {self.voice}")
+        else:
+            # Если нет settings_manager, используем значение параметра
+            self.voice = voice
+            print(f"[TTS INIT] Используем голос из параметра: {self.voice}")
         
         # Определяем движок TTS
         self.tts_engine = "gtts"  # По умолчанию используем gTTS
@@ -192,16 +213,95 @@ class TTSManager:
         
         Args:
             voice (str): Идентификатор голоса
-        """
-        self.voice = voice
-        
-        # Если используем Google Cloud TTS, передаем настройку ему тоже
-        if self.tts_engine == "google_cloud" and self.google_tts_manager:
-            self.google_tts_manager.set_voice(voice)
             
-        if self.debug:
-            print(f"Установлен голос: {voice}")
-        
+        Returns:
+            bool: True если успешно, иначе False
+        """
+        try:
+            # Логируем начало процесса
+            sentry_sdk.add_breadcrumb(
+                category="voice",
+                message=f"TTS Manager: Начало установки голоса {voice}",
+                level="info"
+            )
+            print(f"[TTS] Запрос на установку голоса: {voice}")
+            print(f"[TTS] Текущий голос перед установкой: {self.voice}")
+            print(f"[TTS] Текущий движок TTS: {self.tts_engine}")
+            
+            # Проверяем наличие голоса, если есть settings_manager
+            if self.settings_manager:
+                available_voices = self.settings_manager.get_available_voices()
+                sentry_sdk.add_breadcrumb(
+                    category="voice",
+                    message=f"TTS Manager: Доступные голоса: {available_voices}",
+                    level="info"
+                )
+                print(f"[TTS] Доступные голоса: {available_voices}")
+                
+                if voice not in available_voices:
+                    error_msg = f"TTS Manager: Голос {voice} не найден в списке доступных голосов"
+                    print(f"[TTS ERROR] {error_msg}")
+                    sentry_sdk.capture_message(error_msg, level="error")
+                    return False
+
+            # Сохраняем старый голос для логирования
+            old_voice = self.voice
+            
+            # Устанавливаем новый голос
+            self.voice = voice
+            print(f"[TTS] Голос установлен: {voice}")
+            
+            # Если используем Google Cloud TTS, передаем настройку ему тоже
+            if self.tts_engine == "google_cloud" and self.google_tts_manager:
+                try:
+                    print(f"[TTS] Вызов google_tts_manager.set_voice({voice})")
+                    result = self.google_tts_manager.set_voice(voice)
+                    sentry_sdk.add_breadcrumb(
+                        category="voice",
+                        message=f"TTS Manager: Результат установки голоса в Google Cloud TTS: {result}",
+                        level="info"
+                    )
+                    print(f"[TTS] Результат установки голоса в Google Cloud TTS: {result}")
+                    
+                    if not result:
+                        error_msg = f"Не удалось установить голос {voice} в Google Cloud TTS"
+                        print(f"[TTS WARNING] {error_msg}")
+                        sentry_sdk.capture_message(error_msg, level="warning")
+                        # Важно: НЕ возвращаем False и не восстанавливаем старый голос!
+                        # Голос будет установлен в TTSManager, но возможно не будет работать в Google Cloud
+                        print(f"[TTS] Продолжаем установку голоса, несмотря на ошибку Google Cloud TTS")
+                except Exception as cloud_error:
+                    error_msg = f"Ошибка при установке голоса в Google Cloud TTS: {cloud_error}"
+                    print(f"[TTS WARNING] {error_msg}")
+                    sentry_sdk.capture_exception(cloud_error)
+                    # Важно: НЕ возвращаем False и не восстанавливаем старый голос!
+                    print(f"[TTS] Продолжаем установку голоса, несмотря на ошибку Google Cloud TTS")
+                    
+            # Проверяем, сохранился ли голос
+            print(f"[TTS] Финальная проверка - текущий голос: {self.voice}")
+            
+            if self.voice != voice:
+                error_msg = f"Голос не был установлен: ожидалось {voice}, получено {self.voice}"
+                print(f"[TTS ERROR] {error_msg}")
+                sentry_sdk.capture_message(error_msg, level="error")
+                return False
+                
+            # Логируем успешную установку голоса
+            sentry_sdk.add_breadcrumb(
+                category="voice",
+                message=f"TTS Manager: Голос успешно изменен с {old_voice} на {self.voice}",
+                level="info"
+            )
+            print(f"[TTS] Голос успешно изменен с {old_voice} на {self.voice}")
+                
+            return True
+                
+        except Exception as e:
+            error_msg = f"Критическая ошибка при установке голоса: {e}"
+            print(f"[TTS CRITICAL ERROR] {error_msg}")
+            sentry_sdk.capture_exception(e)
+            return False
+    
     def _load_stats(self):
         """Загружает статистику из файла"""
         if os.path.exists(self.stats_file):
@@ -271,7 +371,7 @@ class TTSManager:
     
     def get_cached_filename(self, text, use_wav=None, voice=None):
         """
-        Создает имя файла на основе текста и голоса в читаемом формате
+        Возвращает путь к кэшированному файлу для указанного текста и голоса
         
         Args:
             text (str): Текст для озвучки
@@ -281,40 +381,32 @@ class TTSManager:
         Returns:
             str: Путь к файлу
         """
-        # Если используем Google Cloud TTS, делегируем ему получение имени файла
-        if self.tts_engine == "google_cloud" and self.google_tts_manager:
-            return self.google_tts_manager.get_cached_filename(text, use_wav, voice)
-        
-        # Если use_wav не указан, используем значение по умолчанию
-        if use_wav is None:
-            use_wav = self.use_wav
+        try:
+            if use_wav is None:
+                use_wav = self.use_wav
+                
+            if voice is None:
+                voice = self.voice
+                
+            # Хэшируем текст для создания имени файла
+            text_hash = hashlib.md5(text.encode('utf-8')).hexdigest()
             
-        # Если voice не указан, используем текущий голос
-        if voice is None:
-            voice = self.voice
+            # Добавляем идентификатор голоса к имени файла
+            filename = f"{voice}_{text_hash}"
             
-        # Создаем понятное имя файла на основе текста
-        # 1. Заменяем пробелы и специальные символы на подчеркивания
-        # 2. Ограничиваем длину имени файла
-        # 3. Добавляем идентификатор голоса
-        safe_text = text[:30]  # Берем только первые 30 символов
-        safe_text = ''.join(c if c.isalnum() or c.isspace() else '_' for c in safe_text)
-        safe_text = safe_text.replace(' ', '_').lower()
-        
-        # Добавляем короткое обозначение голоса
-        voice_short = voice.split('-')[-1]  # Берем только последнюю часть, например "A" из "ru-RU-Standard-A"
-        
-        # Создаем имя файла, но также добавляем хеш для уникальности
-        text_hash = hashlib.md5(f"{text}_{voice}".encode('utf-8')).hexdigest()[:8]
-        
-        # Формируем имя файла
-        filename = f"{safe_text}_{voice_short}_{text_hash}"
-        
-        # Возвращаем имя файла с соответствующим расширением
-        if use_wav:
-            return os.path.join(self.cache_dir, f"{filename}.wav")
-        else:
-            return os.path.join(self.cache_dir, f"{filename}.mp3")
+            # Определяем расширение файла
+            ext = "wav" if use_wav else "mp3"
+            
+            # Формируем полный путь к файлу
+            file_path = os.path.join(self.cache_dir, f"{filename}.{ext}")
+            
+            return file_path
+        except Exception as e:
+            error_msg = f"Ошибка при получении пути к кэшированному файлу: {e}"
+            print(f"[TTS CACHE ERROR] {error_msg}")
+            sentry_sdk.capture_exception(e)
+            # Возвращаем стандартный путь в случае ошибки
+            return os.path.join(self.cache_dir, f"error_{hashlib.md5(text.encode('utf-8')).hexdigest()}.mp3")
     
     def mp3_to_wav(self, mp3_file):
         """
@@ -354,116 +446,122 @@ class TTSManager:
             
     def generate_speech(self, text, force_regenerate=False, voice=None):
         """
-        Генерирует озвучку текста и сохраняет в кэш
+        Генерирует озвучку для указанного текста и возвращает путь к аудиофайлу
         
         Args:
-            text (str): Текст для озвучки
-            force_regenerate (bool): Пересоздать файл, даже если он уже существует
-            voice (str, optional): Идентификатор голоса
+            text (str): Текст для озвучивания
+            force_regenerate (bool): Принудительно сгенерировать озвучку, даже если файл уже существует
+            voice (str): Идентификатор голоса (если None, используется текущий голос)
             
         Returns:
-            str: Путь к сгенерированному файлу
+            str: Путь к аудиофайлу или None в случае ошибки
         """
         try:
-            if not text or not isinstance(text, str):
+            if not text:
                 return None
                 
-            # Если используем Google Cloud TTS, делегируем ему генерацию
-            if self.tts_engine == "google_cloud" and self.google_tts_manager:
-                return self.google_tts_manager.generate_speech(text, force_regenerate, voice)
-            
-            # Используем указанный голос или текущий по умолчанию
             if voice is None:
                 voice = self.voice
-            
-            # Сначала получаем имя MP3 файла с учетом голоса
-            mp3_file = self.get_cached_filename(text, use_wav=False, voice=voice)
-            
-            # Если нужен WAV, определяем его имя
-            wav_file = None
-            if self.use_wav:
-                wav_file = self.get_cached_filename(text, use_wav=True, voice=voice)
-            
-            with self.cache_lock:
-                # Проверяем наличие файлов в кэше
-                mp3_exists = os.path.exists(mp3_file)
-                wav_exists = wav_file and os.path.exists(wav_file)
                 
-                # Если нужен MP3 и он есть, или нужен WAV и он есть
-                if (not self.use_wav and mp3_exists and not force_regenerate) or \
-                   (self.use_wav and wav_exists and not force_regenerate):
+            # Получаем путь к MP3 и WAV-файлам в кэше
+            mp3_file = self.get_cached_filename(text, use_wav=False, voice=voice)
+            wav_file = self.get_cached_filename(text, use_wav=True, voice=voice)
+            
+            # Проверяем наличие файлов
+            mp3_exists = os.path.exists(mp3_file)
+            wav_exists = os.path.exists(wav_file)
+            
+            # Если нужен WAV и он уже есть, возвращаем его
+            if self.use_wav and wav_exists and not force_regenerate:
+                # Увеличиваем счётчик использования кэша
+                self.stats["cached_used"] += 1
+                self._save_stats()
+                
+                if self.debug:
+                    print(f"Использован кэш для: {text} (голос: {voice})")
+                    
+                return wav_file
+            
+            # Если нужен MP3 и он уже есть, возвращаем его
+            if not self.use_wav and mp3_exists and not force_regenerate:
+                # Увеличиваем счётчик использования кэша
+                self.stats["cached_used"] += 1
+                self._save_stats()
+                
+                if self.debug:
+                    print(f"Использован кэш для: {text} (голос: {voice})")
+                    
+                return mp3_file
+            
+            # Если нужен WAV, но есть только MP3 и не нужно пересоздавать
+            if self.use_wav and mp3_exists and not force_regenerate:
+                # Конвертируем MP3 в WAV
+                wav_result = self.mp3_to_wav(mp3_file)
+                if wav_result:
                     # Увеличиваем счётчик использования кэша
                     self.stats["cached_used"] += 1
                     self._save_stats()
                     
                     if self.debug:
-                        print(f"Использован кэш для: {text} (голос: {voice})")
+                        print(f"Использован кэш (конвертация в WAV) для: {text} (голос: {voice})")
                         
-                    return wav_file if self.use_wav else mp3_file
+                    return wav_result
+            
+            # Если нужно сгенерировать файл и мы используем Google Cloud TTS
+            if self.tts_engine == "google_cloud" and self.google_tts_manager:
+                return self.google_tts_manager.generate_speech(text, force_regenerate, voice)
+            
+            if self.debug:
+                print(f"[TTS] Генерация озвучки с помощью gTTS для: {text} (голос: {voice})")
                 
-                # Если нужен WAV, но есть только MP3 и не нужно пересоздавать
-                if self.use_wav and mp3_exists and not force_regenerate:
-                    # Конвертируем MP3 в WAV
+            # Увеличиваем счетчики запросов
+            self.stats["total_requests"] += 1
+            self.stats["today_requests"] += 1
+            
+            # Замеряем время запроса
+            start_time = time.time()
+            
+            try:
+                # Создаем объект gTTS и сохраняем в MP3-файл
+                # Обратите внимание, что gTTS не поддерживает выбор конкретного голоса напрямую,
+                # но мы все равно храним разные файлы для разных голосов
+                tts = gTTS(text=text, lang=self.lang, tld=self.tld, slow=False)
+                tts.save(mp3_file)
+                
+                # Если нужен WAV, конвертируем MP3 в WAV
+                result_file = mp3_file
+                if self.use_wav:
                     wav_result = self.mp3_to_wav(mp3_file)
                     if wav_result:
-                        # Увеличиваем счётчик использования кэша
-                        self.stats["cached_used"] += 1
-                        self._save_stats()
-                        
-                        if self.debug:
-                            print(f"Использован кэш (конвертация в WAV) для: {text} (голос: {voice})")
-                            
-                        return wav_result
+                        result_file = wav_result
                 
-                if self.debug:
-                    print(f"Генерация озвучки для: {text} (голос: {voice})")
-                    
-                # Увеличиваем счетчики запросов
-                self.stats["total_requests"] += 1
-                self.stats["today_requests"] += 1
+                # Вычисляем время выполнения
+                elapsed_time = time.time() - start_time
                 
-                # Замеряем время запроса
-                start_time = time.time()
+                # Записываем в историю
+                self.stats["requests_history"].append({
+                    "text": text,
+                    "time": elapsed_time,
+                    "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "voice": voice
+                })
                 
-                try:
-                    # Создаем объект gTTS и сохраняем в MP3-файл
-                    # Обратите внимание, что gTTS не поддерживает выбор конкретного голоса напрямую,
-                    # но мы все равно храним разные файлы для разных голосов
-                    tts = gTTS(text=text, lang=self.lang, tld=self.tld, slow=False)
-                    tts.save(mp3_file)
+                # Ограничиваем историю до 100 последних запросов
+                if len(self.stats["requests_history"]) > 100:
+                    self.stats["requests_history"] = self.stats["requests_history"][-100:]
                     
-                    # Если нужен WAV, конвертируем MP3 в WAV
-                    result_file = mp3_file
-                    if self.use_wav:
-                        wav_result = self.mp3_to_wav(mp3_file)
-                        if wav_result:
-                            result_file = wav_result
-                    
-                    # Вычисляем время выполнения
-                    elapsed_time = time.time() - start_time
-                    
-                    # Записываем в историю
-                    self.stats["requests_history"].append({
-                        "text": text,
-                        "time": elapsed_time,
-                        "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "voice": voice
-                    })
-                    
-                    # Ограничиваем историю до 100 последних запросов
-                    if len(self.stats["requests_history"]) > 100:
-                        self.stats["requests_history"] = self.stats["requests_history"][-100:]
-                        
-                    # Сохраняем статистику
-                    self._save_stats()
-                    
-                    return result_file
-                except Exception as e:
-                    print(f"Ошибка при генерации озвучки: {e}")
-                    return None
+                # Сохраняем статистику
+                self._save_stats()
+                
+                return result_file
+            except Exception as e:
+                error_msg = f"Ошибка при генерации озвучки: {e}"
+                print(f"[TTS ERROR] {error_msg}")
+                sentry_sdk.capture_exception(e)
+                return None
         except Exception as e:
             error_msg = f"Ошибка при генерации речи: {e}"
-            print(error_msg)
+            print(f"[TTS CRITICAL ERROR] {error_msg}")
             sentry_sdk.capture_exception(e)
             return None
     
@@ -671,3 +769,30 @@ class TTSManager:
             print(error_msg)
             sentry_sdk.capture_exception(e)
             return False
+
+    def _get_voice_specific_filename(self, text, voice, check_exists=True):
+        """
+        Возвращает путь к файлу для конкретного голоса, без зависимости от API
+        
+        Args:
+            text (str): Текст для озвучки
+            voice (str): Идентификатор голоса
+            check_exists (bool): Проверять ли существование файла
+            
+        Returns:
+            str: Путь к файлу или None, если файл не найден и check_exists=True
+        """
+        try:
+            # Получаем базовый путь к файлу
+            file_path = self.get_cached_filename(text, use_wav=self.use_wav, voice=voice)
+            
+            # Проверяем существование файла, если нужно
+            if check_exists and not os.path.exists(file_path):
+                return None
+                
+            return file_path
+        except Exception as e:
+            error_msg = f"Ошибка при получении пути к файлу для голоса {voice}: {e}"
+            print(f"[TTS CACHE ERROR] {error_msg}")
+            sentry_sdk.capture_exception(e)
+            return None

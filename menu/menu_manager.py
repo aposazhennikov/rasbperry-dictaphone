@@ -138,7 +138,7 @@ class MenuManager:
             # Озвучиваем текущий выбранный пункт, если есть
             if self.current_menu.items and len(self.current_menu.items) > 0:
                 try:
-                    current_index = self.current_menu.current_index
+                    current_index = self.current_menu.current_selection
                     if current_index >= 0 and current_index < len(self.current_menu.items):
                         current_item = self.current_menu.items[current_index]
                         if self.tts_enabled:
@@ -182,9 +182,9 @@ class MenuManager:
                 print("Навигация: ВВЕРХ")
                 
             # Перемещаем указатель вверх
-            old_index = self.current_menu.current_index
+            old_index = self.current_menu.current_selection
             self.current_menu.move_up()
-            new_index = self.current_menu.current_index
+            new_index = self.current_menu.current_selection
             
             # Если индекс изменился, считаем навигацию успешной
             if old_index != new_index:
@@ -248,9 +248,9 @@ class MenuManager:
                 print("Навигация: ВНИЗ")
                 
             # Перемещаем указатель вниз
-            old_index = self.current_menu.current_index
+            old_index = self.current_menu.current_selection
             self.current_menu.move_down()
-            new_index = self.current_menu.current_index
+            new_index = self.current_menu.current_selection
             
             # Если индекс изменился, считаем навигацию успешной
             if old_index != new_index:
@@ -516,42 +516,214 @@ class MenuManager:
         Returns:
             str: Сообщение о результате операции
         """
-        # Проверяем, доступен ли TTS
-        if not self.tts_enabled:
-            return "Озвучка отключена"
+        try:
+            # Логируем начало процесса
+            sentry_sdk.add_breadcrumb(
+                category="voice",
+                message=f"Начало процесса изменения голоса на {voice_id}",
+                level="info"
+            )
+            print(f"[VOICE] Запрос на изменение голоса: {voice_id}")
             
-        # Отладочная информация
-        if self.debug:
-            print(f"\nИзменение голоса на: {voice_id}")
-            print(f"Предыдущий голос: {self.settings_manager.get_voice()}")
+            # Проверяем, доступен ли TTS
+            if not self.tts_enabled:
+                sentry_sdk.capture_message("Попытка изменить голос при отключенной озвучке", level="warning")
+                return "Озвучка отключена"
             
-        # Проверяем, не выбран ли уже этот голос
-        if self.settings_manager.get_voice() == voice_id:
-            if self.debug:
-                print(f"Голос {voice_id} уже выбран")
-            message = "Этот голос уже выбран"
-            self.tts_manager.play_speech(message, voice_id=voice_id)
-            return message
+            # Отладочная информация
+            current_voice = self.settings_manager.get_voice()
+            sentry_sdk.add_breadcrumb(
+                category="voice",
+                message=f"Текущий голос: {current_voice}",
+                level="info"
+            )
+            print(f"[VOICE] Текущий голос в настройках: {current_voice}")
             
-        # Изменяем голос в настройках
-        if self.settings_manager.set_voice(voice_id):
+            # Проверяем, не выбран ли уже этот голос
+            if current_voice == voice_id:
+                sentry_sdk.add_breadcrumb(
+                    category="voice",
+                    message=f"Голос {voice_id} уже выбран",
+                    level="info"
+                )
+                print(f"[VOICE] Голос {voice_id} уже выбран, никаких изменений не требуется")
+                message = "Этот голос уже выбран"
+                self.tts_manager.play_speech(message, voice_id=voice_id)
+                return message
+            
+            # Проверяем существование голоса в доступных
+            available_voices = self.settings_manager.get_available_voices()
+            sentry_sdk.add_breadcrumb(
+                category="voice",
+                message=f"Доступные голоса: {available_voices}",
+                level="info"
+            )
+            print(f"[VOICE] Доступные голоса: {available_voices}")
+            
+            if voice_id not in available_voices:
+                error_msg = f"Голос {voice_id} не найден в списке доступных голосов"
+                print(f"[VOICE ERROR] {error_msg}")
+                sentry_sdk.capture_message(error_msg, level="error")
+                return "Ошибка: выбранный голос недоступен"
+            
+            # Изменяем голос в настройках
+            print(f"[VOICE] Вызов settings_manager.set_voice({voice_id})")
+            if not self.settings_manager.set_voice(voice_id):
+                error_msg = f"Не удалось установить голос {voice_id} в настройках"
+                print(f"[VOICE ERROR] {error_msg}")
+                sentry_sdk.capture_message(error_msg, level="error")
+                return "Ошибка при изменении голоса в настройках"
+            
+            # Проверяем результат установки голоса в настройках
+            new_settings_voice = self.settings_manager.get_voice()
+            sentry_sdk.add_breadcrumb(
+                category="voice",
+                message=f"Голос в настройках после установки: {new_settings_voice}",
+                level="info"
+            )
+            print(f"[VOICE] Голос в настройках после установки: {new_settings_voice}")
+            
             # Изменяем голос в TTS менеджере
-            self.tts_manager.set_voice(voice_id)
+            try:
+                print(f"[VOICE] Вызов tts_manager.set_voice({voice_id})")
+                result = self.tts_manager.set_voice(voice_id)
+                sentry_sdk.add_breadcrumb(
+                    category="voice",
+                    message=f"Результат установки голоса в TTS: {result}",
+                    level="info"
+                )
+                print(f"[VOICE] Результат установки голоса в TTS: {result}")
+                
+                if not result:
+                    error_msg = f"Не удалось установить голос {voice_id} в TTS менеджере"
+                    print(f"[VOICE ERROR] {error_msg}")
+                    sentry_sdk.capture_message(error_msg, level="error")
+                    return "Ошибка при изменении голоса в TTS системе"
+            except Exception as tts_error:
+                error_msg = f"Ошибка при установке голоса {voice_id} в TTS менеджере: {str(tts_error)}"
+                print(f"[VOICE ERROR] {error_msg}")
+                sentry_sdk.capture_exception(tts_error)
+                return "Ошибка при изменении голоса в TTS системе"
+            
+            # Проверяем текущий голос в TTS после установки
+            tts_current_voice = getattr(self.tts_manager, 'voice', 'неизвестно')
+            sentry_sdk.add_breadcrumb(
+                category="voice",
+                message=f"Текущий голос в TTS после установки: {tts_current_voice}",
+                level="info"
+            )
+            print(f"[VOICE] Текущий голос в TTS после установки: {tts_current_voice}")
+            
+            # Важно! Перестраиваем структуру меню, чтобы обновить голоса во всех пунктах
+            try:
+                # Сохраняем текущее меню и его состояние
+                current_menu_path = []
+                temp_menu = self.current_menu
+                while temp_menu and temp_menu != self.root_menu:
+                    # Ищем индекс текущего меню в родительском
+                    if temp_menu.parent:
+                        for i, item in enumerate(temp_menu.parent.items):
+                            if item is temp_menu:
+                                current_menu_path.insert(0, i)
+                                break
+                    temp_menu = temp_menu.parent
+                
+                current_index = self.current_menu.current_selection
+                sentry_sdk.add_breadcrumb(
+                    category="voice",
+                    message=f"Сохранение состояния меню перед обновлением: путь {current_menu_path}, индекс {current_index}",
+                    level="info"
+                )
+                print(f"[VOICE] Сохранение состояния меню перед обновлением: путь {current_menu_path}, индекс {current_index}")
+                
+                # Пересоздаем структуру меню
+                self.create_menu_structure()
+                sentry_sdk.add_breadcrumb(
+                    category="voice",
+                    message="Структура меню успешно пересоздана",
+                    level="info"
+                )
+                print(f"[VOICE] Структура меню успешно пересоздана")
+                
+                # Восстанавливаем положение в меню
+                temp_menu = self.root_menu
+                for menu_index in current_menu_path:
+                    if 0 <= menu_index < len(temp_menu.items):
+                        item = temp_menu.items[menu_index]
+                        if isinstance(item, SubMenu):
+                            temp_menu = item
+                        else:
+                            # Если это не подменю, прерываем восстановление
+                            break
+                
+                # Устанавливаем текущее меню и выбранный пункт
+                self.current_menu = temp_menu
+                if 0 <= current_index < len(self.current_menu.items):
+                    self.current_menu.current_selection = current_index
+                
+                sentry_sdk.add_breadcrumb(
+                    category="voice",
+                    message=f"Состояние меню восстановлено: {self.current_menu.name}, индекс {self.current_menu.current_selection}",
+                    level="info"
+                )
+                print(f"[VOICE] Состояние меню восстановлено: {self.current_menu.name}, индекс {self.current_menu.current_selection}")
+                
+            except Exception as menu_error:
+                error_msg = f"Ошибка при обновлении структуры меню: {str(menu_error)}"
+                print(f"[VOICE ERROR] {error_msg}")
+                sentry_sdk.capture_exception(menu_error)
+                # Продолжаем выполнение, это не критическая ошибка
             
             # Пробуем тестовую озвучку с новым голосом
             message = "Голос успешно изменен"
             
-            # Явно передаем идентификатор голоса для корректной озвучки
-            self.tts_manager.play_speech(message, voice_id=voice_id)
+            try:
+                print(f"[VOICE] Пробуем тестовую озвучку с голосом {voice_id}")
+                # Явно передаем идентификатор голоса для корректной озвучки
+                result = self.tts_manager.play_speech(message, voice_id=voice_id)
+                sentry_sdk.add_breadcrumb(
+                    category="voice",
+                    message=f"Результат тестовой озвучки: {result}",
+                    level="info"
+                )
+                print(f"[VOICE] Результат тестовой озвучки: {result}")
+                
+                if not result:
+                    error_msg = f"Не удалось выполнить тестовую озвучку с голосом {voice_id}"
+                    print(f"[VOICE ERROR] {error_msg}")
+                    sentry_sdk.capture_message(error_msg, level="error")
+                    return "Ошибка при проверке нового голоса"
+            except Exception as speech_error:
+                error_msg = f"Ошибка при тестовой озвучке с голосом {voice_id}: {str(speech_error)}"
+                print(f"[VOICE ERROR] {error_msg}")
+                sentry_sdk.capture_exception(speech_error)
+                return "Ошибка при проверке нового голоса"
             
-            # Отладочная информация
-            if self.debug:
-                print(f"Текущий голос в настройках: {self.settings_manager.get_voice()}")
-                print(f"Текущий голос в TTS менеджере: {self.tts_manager.voice}")
+            # Обновляем отображение текущего меню
+            self.display_current_menu()
+            
+            # Финальная проверка
+            final_voice = self.settings_manager.get_voice()
+            sentry_sdk.add_breadcrumb(
+                category="voice",
+                message=f"Финальная проверка голоса: {final_voice}",
+                level="info"
+            )
+            print(f"[VOICE] Финальная проверка голоса в настройках: {final_voice}")
+            
+            # Отправляем в Sentry информацию об успешной смене голоса
+            sentry_sdk.capture_message(
+                f"Голос успешно изменен с {current_voice} на {final_voice}",
+                level="info"
+            )
             
             return message
-        else:
-            return "Ошибка при изменении голоса"
+            
+        except Exception as e:
+            error_msg = f"Критическая ошибка при смене голоса на {voice_id}: {str(e)}"
+            print(f"[VOICE CRITICAL ERROR] {error_msg}")
+            sentry_sdk.capture_exception(e)
+            return "Критическая ошибка при изменении голоса"
         
     def create_menu_structure(self):
         """Создает структуру меню согласно заданной схеме"""
@@ -637,9 +809,13 @@ class MenuManager:
             if self.debug:
                 print(f"  Добавление пункта: {voice_desc} -> {voice_id}")
                 
+            # Создаем обертку для каждого голоса, чтобы избежать проблем с lambda в цикле
+            def create_voice_action(voice_id=voice_id):
+                return lambda: self.change_voice(voice_id)
+                
             voice_menu.add_item(MenuItem(
                 voice_desc, 
-                lambda voice=voice_id: self.change_voice(voice)
+                create_voice_action()
             ))
         
         # Добавляем подменю для подтверждения удаления
@@ -667,7 +843,7 @@ class MenuManager:
         debug_info = {
             "current_menu": self.current_menu.name if self.current_menu else "None",
             "menu_items": [item.name for item in self.current_menu.items] if self.current_menu else [],
-            "current_index": getattr(self.current_menu, 'current_index', 0)
+            "current_index": getattr(self.current_menu, 'current_selection', 0)
         }
         
         # Добавляем информацию от TTS менеджера, если он доступен
@@ -1248,3 +1424,34 @@ class MenuManager:
         
         # Изменяем громкость
         self.playback_manager.adjust_volume(delta)
+
+    def _get_voice_id_by_description(self, voice_description):
+        """
+        Находит идентификатор голоса по его описанию
+        
+        Args:
+            voice_description (str): Описание голоса (например, "Мужской голос 2")
+            
+        Returns:
+            str: Идентификатор голоса или None, если не найден
+        """
+        try:
+            # Получаем словарь голосов
+            voices_dict = self.settings_manager.get_available_voices()
+            
+            # Ищем голос по описанию
+            for voice_id, description in voices_dict.items():
+                if description == voice_description:
+                    if self.debug:
+                        print(f"Найден идентификатор {voice_id} для описания '{voice_description}'")
+                    return voice_id
+                    
+            if self.debug:
+                print(f"Идентификатор для описания '{voice_description}' не найден")
+            return None
+            
+        except Exception as e:
+            error_msg = f"Ошибка при поиске идентификатора голоса: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return None
