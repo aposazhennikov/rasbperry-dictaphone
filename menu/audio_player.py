@@ -395,15 +395,48 @@ class AudioPlayer:
         """
         try:
             if not self.is_paused:
+                if self.debug:
+                    print("Попытка возобновить воспроизведение, но оно не на паузе")
                 return False
+            
+            # Сохраняем позицию до возобновления для дебага
+            saved_position = self.position
                 
             if self.debug:
-                print(f"Возобновляем воспроизведение с позиции {self.position:.2f} сек")
+                print(f"\n*** ВОЗОБНОВЛЕНИЕ ВОСПРОИЗВЕДЕНИЯ В AUDIO_PLAYER ***")
+                print(f"Возобновляем воспроизведение с позиции {saved_position:.2f} сек")
+                
+            # Проверяем, что файл существует
+            if not self.file_path or not os.path.exists(self.file_path):
+                error_msg = f"Не удалось возобновить воспроизведение: файл не найден {self.file_path}"
+                print(error_msg)
+                sentry_sdk.capture_message(error_msg, level="error")
+                return False
+                
+            # Защита от некорректной позиции
+            if self.position < 0:
+                self.position = 0
+                if self.debug:
+                    print("Исправлена отрицательная позиция")
+            elif self.position > self.duration and self.duration > 0:
+                self.position = 0
+                if self.debug:
+                    print("Позиция превышает длительность, воспроизведение с начала")
                 
             # Запускаем воспроизведение с текущей позиции
             cmd = self._get_playback_command(position=self.position)
             
+            if self.debug:
+                print(f"Команда возобновления: {cmd}")
+            
             try:
+                # Останавливаем все предыдущие процессы перед запуском нового
+                self._stop_process()
+                
+                # Сбрасываем флаг остановки
+                self.stop_playback = False
+                
+                # Запускаем новый процесс воспроизведения
                 self.playback_process = subprocess.Popen(
                     cmd, 
                     stdout=subprocess.PIPE, 
@@ -418,7 +451,12 @@ class AudioPlayer:
                 # Запускаем таймер снова
                 self._start_timer()
                 
+                # Обновляем статус
                 self.is_paused = False
+                self.is_playing = True
+                
+                if self.debug:
+                    print(f"Воспроизведение успешно возобновлено с позиции {saved_position:.2f}")
                 
                 return True
             except Exception as e:
@@ -1088,22 +1126,56 @@ class AudioPlayer:
             # Если позиция не указана, используем текущую
             if position is None:
                 position = self.position
+            
+            # Защита от некорректных позиций
+            if position < 0:
+                position = 0
+                if self.debug:
+                    print("Исправлена отрицательная позиция")
+            elif position > self.duration and self.duration > 0:
+                position = 0
+                if self.debug:
+                    print("Позиция превышает длительность, начинаем с начала")
                 
             if self.debug:
                 print(f"Формирование команды воспроизведения для {file_ext}, позиция: {position:.2f} сек")
             
-            # Параметры для aplay/mpg123
+            # Параметры для aplay/mpg123/sox
             if file_ext == '.wav':
-                cmd = ["aplay", self.file_path]
+                # Для WAV файлов при позиции > 0 используем sox для начала с нужной позиции
                 if position > 0:
-                    # aplay не поддерживает начало с середины, нужно обрабатывать отдельно
-                    # Для WAV файлов можно использовать sox для обрезки
-                    if self.debug:
-                        print(f"WAV: позиция {position:.2f} сек не поддерживается напрямую")
-                    # Можно реализовать через временный файл и sox, если нужно
+                    # Проверяем, доступен ли sox
+                    try:
+                        # Проверка наличия sox
+                        sox_check = subprocess.run(["which", "sox"], 
+                                                 stdout=subprocess.PIPE, 
+                                                 stderr=subprocess.PIPE,
+                                                 text=True)
+                        
+                        if sox_check.returncode == 0:
+                            # sox доступен, используем его для воспроизведения с позиции
+                            skip_seconds = position
+                            cmd = ["sox", self.file_path, "-d", "trim", f"{skip_seconds}"]
+                            if self.debug:
+                                print(f"WAV: используем sox для начала с позиции {position:.2f} сек")
+                            return cmd
+                        else:
+                            # sox недоступен, используем aplay с предупреждением
+                            if self.debug:
+                                print(f"WAV: sox не найден, продолжаем с начала файла")
+                            cmd = ["aplay", self.file_path]
+                    except Exception as sox_error:
+                        if self.debug:
+                            print(f"Ошибка при проверке sox: {sox_error}, используем aplay")
+                        cmd = ["aplay", self.file_path]
+                else:
+                    # Если позиция = 0, просто используем aplay
+                    cmd = ["aplay", self.file_path]
             elif file_ext in ['.mp3', '.ogg']:
                 cmd = ["mpg123", "-q"]
                 if position > 0:
+                    # Для MP3 используем параметр -k для указания начального фрейма
+                    # Приблизительный пересчет секунд в фреймы (может зависеть от битрейта)
                     start_frame = int(position * 44100)  # приблизительно
                     cmd.extend(["-k", str(start_frame)])
                     if self.debug:

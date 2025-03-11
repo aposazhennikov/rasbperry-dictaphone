@@ -94,6 +94,9 @@ class MenuManager:
         
         # Инициализация менеджера отображения
         self.display_manager = DisplayManager(self)
+        
+        # Меню, из которого был запущен аудиоплеер (для возврата по KEY_BACK)
+        self.source_menu = None
     
     def set_root_menu(self, menu):
         """
@@ -1251,6 +1254,11 @@ class MenuManager:
             print("\n*** ВОСПРОИЗВЕДЕНИЕ ФАЙЛА ***")
             print(f"Индекс файла: {file_index}")
             
+            # Запоминаем меню, из которого запущен аудиоплеер
+            self.source_menu = self.current_menu
+            if self.debug and self.source_menu:
+                print(f"Запоминаем исходное меню: {self.source_menu.name}")
+            
             # Активируем режим аудиоплеера
             self.player_mode_active = True
             
@@ -1259,13 +1267,18 @@ class MenuManager:
             
             # Устанавливаем текущий индекс файла
             if self.playback_manager.set_current_file(file_index):
-                # Получаем информацию о файле для озвучивания
+                # Получаем информацию о файле
                 file_info = self.playback_manager.get_current_file_info()
+                
+                # Используем простое сообщение "Воспроизведение" вместо полного названия записи
                 if file_info and self.tts_enabled:
                     # Озвучиваем простое сообщение перед воспроизведением
                     voice = self.settings_manager.get_voice()
                     message = "Воспроизведение"
-                    print(f"Озвучивание сообщения перед воспроизведением: {message}")
+                    
+                    if self.debug:
+                        print(f"Озвучивание сообщения перед воспроизведением: {message}")
+                        print(f"Не озвучиваем полное название: {file_info['description']}")
                     
                     # Используем блокирующее воспроизведение, чтобы сообщение прозвучало полностью
                     message_played = False
@@ -1280,6 +1293,7 @@ class MenuManager:
                             message_played = True
                     except Exception as e:
                         print(f"Ошибка при озвучивании перед воспроизведением: {e}")
+                        sentry_sdk.capture_exception(e)
                     
                     # Уменьшаем паузу до 1.5 секунд
                     if message_played:
@@ -1348,26 +1362,92 @@ class MenuManager:
     def _stop_playback(self):
         """Останавливает воспроизведение и возвращается в меню"""
         try:
-            if not self.playback_state["active"]:
+            if not self.playback_state["active"] and not self.player_mode_active:
                 if self.debug:
-                    print("Попытка остановить воспроизведение, но оно не активно")
-                return
+                    print("Попытка остановить воспроизведение, но оно не активно и режим плеера не включен")
+                return False
                 
             print("\n*** ОСТАНОВКА ВОСПРОИЗВЕДЕНИЯ ***")
             
-            # Деактивируем режим аудиоплеера
+            # Деактивируем режим аудиоплеера в ПЕРВУЮ ОЧЕРЕДЬ,
+            # чтобы предотвратить повторную обработку кнопок в режиме плеера
+            old_mode = self.player_mode_active
             self.player_mode_active = False
             if self.debug:
-                print("РЕЖИМ АУДИОПЛЕЕРА ДЕАКТИВИРОВАН")
+                print(f"РЕЖИМ АУДИОПЛЕЕРА ДЕАКТИВИРОВАН (предыдущее значение: {old_mode})")
             
-            # Получаем информацию о меню возврата до остановки воспроизведения
-            return_menu = self.playback_manager.get_return_menu()
+            # Определяем меню для возврата
+            return_menu = None
+            
+            # Приоритетно используем source_menu - меню, из которого был запущен аудиоплеер
+            if hasattr(self, 'source_menu') and self.source_menu:
+                if self.debug:
+                    print(f"Используем сохраненное исходное меню: {self.source_menu.name}")
+                return_menu = self.source_menu
+            else:
+                # Если source_menu не определено, пробуем получить его из playback_manager
+                files_menu = self.playback_manager.get_return_menu()
+                
+                # Проверяем корректность меню возврата
+                if files_menu and hasattr(files_menu, 'name') and 'Записи в папке' in files_menu.name:
+                    if self.debug:
+                        print(f"Возврат к меню со списком записей: {files_menu.name}")
+                    return_menu = files_menu
+                else:
+                    # Если у нас нет правильного меню со списком записей, попробуем найти его
+                    folder = None
+                    if self.playback_state["folder"]:
+                        folder = self.playback_state["folder"]
+                    elif self.playback_manager.current_folder:
+                        folder = self.playback_manager.current_folder
+                    
+                    if folder and self.current_menu and hasattr(self.current_menu, 'parent'):
+                        if self.debug:
+                            print(f"Пытаемся найти меню с записями для папки {folder}")
+                        
+                        # Находим правильное меню для возврата
+                        for menu in self.current_menu.parent.submenus:
+                            if hasattr(menu, 'name') and f"Записи в папке {folder}" in menu.name:
+                                return_menu = menu
+                                if self.debug:
+                                    print(f"Найдено меню записей: {menu.name}")
+                                break
             
             # Запоминаем имя меню для озвучивания
-            menu_name = return_menu.name if return_menu else "меню выбора папки"
+            menu_name = "списку записей"
+            if return_menu and hasattr(return_menu, 'name'):
+                menu_name = return_menu.name
             
             if self.debug:
                 print(f"Меню для возврата: {menu_name}")
+            
+            # Останавливаем воспроизведение ПЕРЕД озвучиванием сообщения
+            # чтобы избежать проблем с перекрытием звуков
+            print("Останавливаем воспроизведение...")
+            
+            # Дополнительная проверка, что playback_manager существует и доступен
+            if not hasattr(self, 'playback_manager') or not self.playback_manager:
+                if self.debug:
+                    print("ОШИБКА: playback_manager не найден")
+                return False
+                
+            # Принудительная остановка воспроизведения
+            stop_result = self.playback_manager.stop_playback()
+            if not stop_result and self.debug:
+                print("ОШИБКА: stop_playback вернул False, возможно, воспроизведение не было остановлено")
+            
+            # Проверяем, что воспроизведение точно остановлено
+            if self.playback_state["active"]:
+                if self.debug:
+                    print("ОШИБКА: После вызова stop_playback флаг active остался True, делаем дополнительную остановку")
+                # Повторная попытка остановки
+                self.playback_manager.stop_playback()
+                # Принудительно сбрасываем состояние
+                self.playback_state["active"] = False
+                self.playback_state["paused"] = False
+            
+            # Даем время для полной остановки воспроизведения
+            time.sleep(0.5)
             
             # Озвучиваем сообщение о возврате блокирующим методом
             if self.tts_enabled:
@@ -1376,7 +1456,7 @@ class MenuManager:
                     voice = self.settings_manager.get_voice()
                     
                     # Формируем сообщение о возврате
-                    message = f"Возврат в {menu_name}"
+                    message = f"Возврат к {menu_name}"
                     
                     if self.debug:
                         print(f"Озвучивание перед возвратом: {message}, голос: {voice}")
@@ -1387,26 +1467,36 @@ class MenuManager:
                     print(f"Ошибка при озвучивании перед переходом: {e}")
                     sentry_sdk.capture_exception(e)
             
-            # Останавливаем воспроизведение с задержкой
-            print("Останавливаем воспроизведение...")
-            self.playback_manager.stop_playback()
-            
-            # Даем время для полной остановки воспроизведения
-            time.sleep(0.5)
-            
             # Выполняем переход в меню
             if return_menu:
                 self.current_menu = return_menu
                 if self.debug:
-                    print(f"Переход в возвратное меню: {return_menu.name}")
+                    print(f"Переход в меню записей: {return_menu.name}")
             else:
-                # Если нет родительского меню, возвращаемся в корневое
-                self.current_menu = self.root_menu
-                if self.debug:
-                    print("Переход в корневое меню")
+                # Если не удалось найти меню с записями, возвращаемся к родительскому меню
+                parent_menu = None
+                if self.current_menu and hasattr(self.current_menu, 'parent'):
+                    parent_menu = self.current_menu.parent
+                
+                if parent_menu:
+                    self.current_menu = parent_menu
+                    if self.debug:
+                        print(f"Переход в родительское меню: {parent_menu.name}")
+                else:
+                    # Если нет родительского меню, возвращаемся в корневое
+                    self.current_menu = self.root_menu
+                    if self.debug:
+                        print("Переход в корневое меню")
             
+            # Сбрасываем source_menu
+            if hasattr(self, 'source_menu'):
+                self.source_menu = None
+                
             # Отображаем меню
             self.display_current_menu()
+            
+            # Возвращаем True если операция успешна
+            return True
                 
         except Exception as e:
             print(f"КРИТИЧЕСКАЯ ОШИБКА при остановке воспроизведения: {e}")
@@ -1417,6 +1507,8 @@ class MenuManager:
             
             # В случае ошибки все равно пытаемся отобразить текущее меню
             self.display_current_menu()
+            
+            return False
     
     def _delete_current_file(self):
         """Удаляет текущий воспроизводимый файл"""
@@ -1501,6 +1593,49 @@ class MenuManager:
             sentry_sdk.capture_exception(e)
             return None
 
+    def _force_kill_playback_processes(self):
+        """Принудительно завершает все процессы воспроизведения"""
+        try:
+            print("Принудительное завершение всех процессов воспроизведения")
+            
+            # Останавливаем воспроизведение через playback_manager
+            if hasattr(self, 'playback_manager') and self.playback_manager:
+                try:
+                    # Останавливаем воспроизведение стандартным методом
+                    self.playback_manager.stop_playback()
+                    
+                    # Если есть audio_player, используем его метод stop
+                    if hasattr(self.playback_manager, 'audio_player') and self.playback_manager.audio_player:
+                        self.playback_manager.audio_player.stop()
+                        
+                        # Если у audio_player есть процесс, пытаемся завершить его
+                        if hasattr(self.playback_manager.audio_player, 'process') and self.playback_manager.audio_player.process:
+                            try:
+                                process = self.playback_manager.audio_player.process
+                                if process.poll() is None:  # Процесс еще запущен
+                                    process.terminate()
+                                    process.wait(timeout=0.5)  # Ждем завершения не более 0.5 сек
+                                    
+                                    # Если процесс все еще жив, используем kill
+                                    if process.poll() is None:
+                                        process.kill()
+                                        process.wait(timeout=0.5)
+                            except Exception as proc_e:
+                                print(f"Ошибка при завершении процесса воспроизведения: {proc_e}")
+                except Exception as player_e:
+                    print(f"Ошибка при остановке через playback_manager: {player_e}")
+                    sentry_sdk.capture_exception(player_e)
+            
+            # Сбрасываем состояние воспроизведения
+            self.playback_state["active"] = False
+            self.playback_state["paused"] = False
+            
+            return True
+        except Exception as e:
+            print(f"Критическая ошибка при принудительном завершении процессов: {e}")
+            sentry_sdk.capture_exception(e)
+            return False
+
     # Добавляем новый метод для обработки нажатий кнопок с учетом режима
     def handle_button_press(self, button_id):
         """
@@ -1513,6 +1648,116 @@ class MenuManager:
             bool: True если кнопка была обработана
         """
         try:
+            # Специальная обработка для кнопки BACK в режиме аудиоплеера
+            # Чтобы эта кнопка всегда имела высший приоритет
+            if button_id == "KEY_BACK" and (self.player_mode_active or self.playback_state["active"]):
+                print("\n*** ПРИНУДИТЕЛЬНАЯ ОСТАНОВКА ВОСПРОИЗВЕДЕНИЯ ПО KEY_BACK ***")
+                print(f"Текущий режим: player_mode_active={self.player_mode_active}, playback_active={self.playback_state['active']}")
+                
+                # 1. Принудительно деактивируем режим аудиоплеера
+                old_mode = self.player_mode_active
+                self.player_mode_active = False
+                print(f"Деактивация режима аудиоплеера (был: {old_mode})")
+                
+                # 2. Принудительно останавливаем все процессы воспроизведения
+                self._force_kill_playback_processes()
+                
+                # 3. Определяем меню для возврата
+                return_menu = None
+                
+                # Приоритетно используем source_menu - меню, из которого был запущен аудиоплеер
+                if self.source_menu:
+                    print(f"Используем сохраненное исходное меню: {self.source_menu.name}")
+                    return_menu = self.source_menu
+                else:
+                    # Если source_menu не определено, пытаемся найти меню с записями для текущей папки
+                    
+                    # Пытаемся получить папку воспроизведения
+                    folder = None
+                    if hasattr(self.playback_manager, 'current_folder') and self.playback_manager.current_folder:
+                        folder = self.playback_manager.current_folder
+                    elif self.playback_state["folder"]:
+                        folder = self.playback_state["folder"]
+                    
+                    print(f"Текущая папка: {folder}")
+                    
+                    # Ищем меню записей для этой папки, начиная с корневого
+                    if folder:
+                        def find_files_menu(menu, folder_name):
+                            # Проверяем текущее меню
+                            if hasattr(menu, 'name') and f"Записи в папке {folder_name}" in menu.name:
+                                return menu
+                            
+                            # Проверяем подменю
+                            if hasattr(menu, 'items'):
+                                for item in menu.items:
+                                    if isinstance(item, SubMenu):
+                                        result = find_files_menu(item, folder_name)
+                                        if result:
+                                            return result
+                            return None
+                        
+                        # Ищем меню с записями начиная с корневого
+                        files_menu = find_files_menu(self.root_menu, folder)
+                        
+                        if files_menu:
+                            print(f"Найдено меню записей: {files_menu.name}")
+                            return_menu = files_menu
+                        else:
+                            print(f"Меню записей для папки {folder} не найдено")
+                    
+                    # Если не нашли меню по названию, пробуем получить его из playback_manager
+                    if not return_menu and hasattr(self.playback_manager, 'get_return_menu'):
+                        try:
+                            files_menu = self.playback_manager.get_return_menu()
+                            if files_menu:
+                                print(f"Получено меню из playback_manager: {files_menu.name}")
+                                return_menu = files_menu
+                        except Exception as menu_e:
+                            print(f"Ошибка при получении меню из playback_manager: {menu_e}")
+                            sentry_sdk.capture_exception(menu_e)
+                
+                # 4. Переходим в нужное меню
+                if return_menu:
+                    self.current_menu = return_menu
+                    print(f"Переход в меню: {return_menu.name}")
+                else:
+                    # Если не нашли нужное меню, проверяем возможность создать его
+                    folder = self.playback_state.get("folder") or getattr(self.playback_manager, 'current_folder', None)
+                    if folder and hasattr(self, '_show_play_files_menu'):
+                        try:
+                            print(f"Пытаемся создать новое меню файлов для папки {folder}")
+                            self._show_play_files_menu(folder)
+                            return True
+                        except Exception as create_menu_e:
+                            print(f"Ошибка при создании меню файлов: {create_menu_e}")
+                            sentry_sdk.capture_exception(create_menu_e)
+                    
+                    # Если не получается создать меню, идем в родительское
+                    parent_menu = None
+                    if self.current_menu and hasattr(self.current_menu, 'parent'):
+                        parent_menu = self.current_menu.parent
+                    
+                    if parent_menu:
+                        self.current_menu = parent_menu
+                        print(f"Переход в родительское меню: {parent_menu.name}")
+                    else:
+                        # В крайнем случае в корневое
+                        self.current_menu = self.root_menu
+                        print("Переход в корневое меню")
+                
+                # 5. Сбрасываем source_menu и флаги воспроизведения
+                self.source_menu = None
+                self.player_mode_active = False
+                self.playback_state["active"] = False
+                self.playback_state["paused"] = False
+                
+                # 6. Отображаем меню
+                print("Отображаем меню после выхода из режима воспроизведения")
+                self.display_current_menu()
+                
+                return True
+            
             # Получаем информацию о текущем режиме
             is_player_mode = self.player_mode_active
             is_recording = self.recording_state["active"]
@@ -1552,7 +1797,10 @@ class MenuManager:
                     return True
                     
                 elif button_id == "KEY_BACK":
-                    # Остановка воспроизведения и возврат в меню
+                    # Этот блок кода не должен выполняться из-за приоритетной обработки выше,
+                    # но оставляем для надежности
+                    if self.debug:
+                        print("Вызов _stop_playback из стандартного обработчика KEY_BACK")
                     self._stop_playback()
                     return True
                     

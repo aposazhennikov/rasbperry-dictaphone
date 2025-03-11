@@ -502,15 +502,16 @@ class PlaybackManager:
                 print(f"Переключение паузы. Текущее состояние: {is_paused}")
                 
             if is_paused:
-                # Возобновляем воспроизведение
+                # Возобновляем воспроизведение с текущей позиции
                 if self.debug:
                     print("Возобновление воспроизведения")
+                    print(f"Текущая позиция: {self.player.get_position()} / {self.player.get_duration()}")
                 
                 # !!! Важно: НЕ озвучиваем возобновление при снятии с паузы,
                 # чтобы избежать проблемы с перезапуском файла из-за озвучки
                 
                 # Возобновляем воспроизведение с текущей позиции
-                result = self.player.resume()
+                result = self.resume_from_pause()
                 
                 if result:
                     self.playback_info["paused"] = False
@@ -528,22 +529,25 @@ class PlaybackManager:
                 # Приостанавливаем воспроизведение
                 if self.debug:
                     print("Приостановка воспроизведения")
-                    
-                # Озвучиваем паузу
-                if self.tts_manager:
-                    try:
-                        if hasattr(self.tts_manager, 'play_speech_blocking'):
-                            self.tts_manager.play_speech_blocking("Пауза", voice_id=None)  # Используем текущий голос
-                        else:
-                            self.tts_manager.play_speech("Пауза", voice_id=None)
-                            time.sleep(0.5)
-                    except Exception as e:
-                        print(f"Ошибка при озвучивании паузы: {e}")
+                    print(f"Текущая позиция: {self.player.get_position()} / {self.player.get_duration()}")
                 
+                # Сначала приостанавливаем воспроизведение, а потом озвучиваем системное сообщение
                 result = self.player.pause()
                 
                 if result:
                     self.playback_info["paused"] = True
+                    
+                    # Теперь озвучиваем паузу с меньшей громкостью, чтобы не сбивать воспроизведение
+                    if self.tts_manager:
+                        try:
+                            if hasattr(self.tts_manager, 'play_speech_blocking'):
+                                self.tts_manager.play_speech_blocking("Пауза", voice_id=None)  # Используем текущий голос
+                            else:
+                                self.tts_manager.play_speech("Пауза", voice_id=None)
+                                time.sleep(0.5)
+                        except Exception as e:
+                            print(f"Ошибка при озвучивании паузы: {e}")
+                            sentry_sdk.capture_exception(e)
                     
                     # Обновляем интерфейс
                     if self.update_callback:
@@ -556,6 +560,54 @@ class PlaybackManager:
                     return False
         except Exception as e:
             error_msg = f"Ошибка при переключении паузы: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return False
+    
+    def resume_from_pause(self):
+        """
+        Возобновляет воспроизведение после паузы с сохранением позиции
+        
+        Returns:
+            bool: True, если воспроизведение успешно возобновлено
+        """
+        try:
+            if self.debug:
+                print("Попытка возобновления воспроизведения после паузы")
+                
+            if not self.playback_info["active"] or not self.playback_info["paused"]:
+                if self.debug:
+                    print("Невозможно возобновить: воспроизведение не активно или не на паузе")
+                return False
+            
+            # Получаем текущую позицию до возобновления
+            current_position = self.player.get_position()
+            if self.debug:
+                print(f"Текущая позиция перед возобновлением: {current_position}")
+                
+            # Возобновляем воспроизведение
+            result = self.player.resume()
+            
+            if result:
+                if self.debug:
+                    print(f"Воспроизведение возобновлено с позиции {current_position}")
+                    
+                # Обновляем состояние
+                self.playback_info["paused"] = False
+                
+                # Обновляем интерфейс
+                if self.update_callback:
+                    self.update_callback()
+                    
+                return True
+            else:
+                if self.debug:
+                    print("Не удалось возобновить воспроизведение")
+                sentry_sdk.capture_message("Не удалось возобновить воспроизведение", level="error")
+                return False
+                
+        except Exception as e:
+            error_msg = f"Ошибка при возобновлении воспроизведения: {e}"
             print(error_msg)
             sentry_sdk.capture_exception(e)
             return False
