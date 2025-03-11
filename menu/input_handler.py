@@ -147,49 +147,26 @@ class InputHandler:
     def _handle_key_press(self, key_code):
         """Обрабатывает нажатие клавиши"""
         try:
-            # Даем приоритет кнопке BACK во всех режимах
-            if key_code == KEY_BACK:
-                # Проверяем, активна ли запись
-                recording_active = getattr(self.menu_manager, 'recording_state', {}).get('active', False)
-                if recording_active:
-                    print("InputHandler: Нажатие KEY_BACK в режиме записи - останавливаем запись")
-                    self.menu_manager._stop_recording()
-                    return
-                else:
-                    # Если запись не активна, просто возвращаемся назад
-                    self.menu_manager.go_back()
-                    return
-                
-            # Проверяем, активна ли запись
-            recording_active = getattr(self.menu_manager, 'recording_state', {}).get('active', False)
-            if recording_active:
-                print(f"InputHandler: Нажатие кнопки {key_code} в режиме записи")
-                # В режиме записи KEY_SELECT переключает паузу
-                if key_code == KEY_SELECT:
-                    print("InputHandler: Переключаем паузу записи")
-                    self.menu_manager._toggle_pause_recording()
-                    return
-                # Игнорируем остальные кнопки в режиме записи
-                return
+            # Преобразуем код клавиши в строковый идентификатор
+            key_id = self._get_key_id(key_code)
+            if self.debug:
+                print(f"Обработка нажатия клавиши: {key_id} (код: {key_code})")
             
-            # Обработка нажатий для режима воспроизведения
-            playback_manager = getattr(self.menu_manager, 'playback_manager', None)
-            if playback_manager and playback_manager.is_playing():
-                playback_manager.handle_key_press(key_code, True)
-                return
-                
-            # Обработка нажатий для основного меню
-            if key_code == KEY_UP:
-                self.menu_manager.move_up()
-            elif key_code == KEY_DOWN:
-                self.menu_manager.move_down()
-            elif key_code == KEY_SELECT:
-                self.menu_manager.select_current_item()
-                
+            # Используем новый универсальный метод обработки нажатий
+            # Он сам определит, в каком режиме находится система (меню, аудиоплеер или запись)
+            handled = self.menu_manager.handle_button_press(key_id)
+            
+            if self.debug:
+                if handled:
+                    print(f"Клавиша {key_id} успешно обработана")
+                else:
+                    print(f"Клавиша {key_id} не обработана")
+            
             # Запоминаем состояние и время для клавиш, которые можно удерживать
             if key_code in self.key_states:
                 self.key_states[key_code]["pressed"] = True
                 self.key_states[key_code]["time"] = time.time()
+                
         except Exception as e:
             error_msg = f"Ошибка при обработке нажатия клавиши: {e}"
             print(error_msg)
@@ -210,3 +187,32 @@ class InputHandler:
             error_msg = f"Ошибка при обработке отпускания клавиши: {e}"
             print(error_msg)
             sentry_sdk.capture_exception(e)
+            
+    def _get_key_id(self, key_code):
+        """
+        Преобразует код клавиши в строковый идентификатор
+        
+        Args:
+            key_code (int): Код клавиши
+        
+        Returns:
+            str: Строковый идентификатор клавиши
+        """
+        key_map = {
+            KEY_UP: "KEY_UP",
+            KEY_DOWN: "KEY_DOWN",
+            KEY_LEFT: "KEY_LEFT",
+            KEY_RIGHT: "KEY_RIGHT",
+            KEY_SELECT: "KEY_SELECT",
+            KEY_BACK: "KEY_BACK",
+            KEY_POWER: "KEY_POWER",
+            KEY_PAGEUP: "KEY_PAGEUP",
+            KEY_PAGEDOWN: "KEY_PAGEDOWN",
+            49: "KEY_1",  # Клавиша 1
+            50: "KEY_2",  # Клавиша 2
+            51: "KEY_3",  # Клавиша 3
+            52: "KEY_4",  # Клавиша 4
+            53: "KEY_5",  # Клавиша 5
+        }
+        
+        return key_map.get(key_code, f"UNKNOWN_{key_code}")

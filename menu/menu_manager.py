@@ -34,6 +34,9 @@ class MenuManager:
         self.cache_dir = cache_dir
         self.records_dir = records_dir
         
+        # Флаг режима аудиоплеера - когда True, все команды идут в аудиоплеер, а не в меню
+        self.player_mode_active = False
+        
         # Инициализация менеджера настроек
         self.settings_manager = settings_manager
         
@@ -1248,6 +1251,12 @@ class MenuManager:
             print("\n*** ВОСПРОИЗВЕДЕНИЕ ФАЙЛА ***")
             print(f"Индекс файла: {file_index}")
             
+            # Активируем режим аудиоплеера
+            self.player_mode_active = True
+            
+            if self.debug:
+                print("РЕЖИМ АУДИОПЛЕЕРА АКТИВИРОВАН")
+            
             # Устанавливаем текущий индекс файла
             if self.playback_manager.set_current_file(file_index):
                 # Получаем информацию о файле для озвучивания
@@ -1284,12 +1293,18 @@ class MenuManager:
                     print("Воспроизведение успешно начато")
                 else:
                     print("ОШИБКА: Не удалось начать воспроизведение")
+                    # Если не удалось начать воспроизведение, деактивируем режим плеера
+                    self.player_mode_active = False
             else:
                 print(f"ОШИБКА: Не удалось установить текущий файл с индексом {file_index}")
+                # Если не удалось установить файл, деактивируем режим плеера
+                self.player_mode_active = False
                 
         except Exception as e:
             print(f"КРИТИЧЕСКАЯ ОШИБКА при воспроизведении файла: {e}")
             sentry_sdk.capture_exception(e)
+            # В случае ошибки деактивируем режим плеера
+            self.player_mode_active = False
     
     def _toggle_pause_playback(self):
         """Переключает паузу воспроизведения"""
@@ -1303,7 +1318,21 @@ class MenuManager:
                 print(f"Переключаем паузу воспроизведения. Текущее состояние: {self.playback_state['paused']}")
             
             # Переключаем паузу
-            self.playback_manager.toggle_pause()
+            success = self.playback_manager.toggle_pause()
+            
+            # Проверяем успешность операции
+            if success:
+                # Получаем обновленное состояние паузы
+                is_paused = self.playback_state["paused"]
+                
+                # Если мы возобновляем воспроизведение (снимаем с паузы), то НЕ озвучиваем сообщение
+                if not is_paused:
+                    # Воспроизведение возобновлено, НЕ нужно озвучивать
+                    if self.debug:
+                        print("Воспроизведение возобновлено - без системного сообщения")
+            else:
+                if self.debug:
+                    print("Не удалось переключить паузу воспроизведения")
             
             # Отображаем текущий статус воспроизведения
             if self.debug:
@@ -1314,6 +1343,7 @@ class MenuManager:
         except Exception as e:
             if self.debug:
                 print(f"КРИТИЧЕСКАЯ ОШИБКА при переключении паузы воспроизведения: {e}")
+            sentry_sdk.capture_exception(e)
     
     def _stop_playback(self):
         """Останавливает воспроизведение и возвращается в меню"""
@@ -1324,6 +1354,11 @@ class MenuManager:
                 return
                 
             print("\n*** ОСТАНОВКА ВОСПРОИЗВЕДЕНИЯ ***")
+            
+            # Деактивируем режим аудиоплеера
+            self.player_mode_active = False
+            if self.debug:
+                print("РЕЖИМ АУДИОПЛЕЕРА ДЕАКТИВИРОВАН")
             
             # Получаем информацию о меню возврата до остановки воспроизведения
             return_menu = self.playback_manager.get_return_menu()
@@ -1376,6 +1411,9 @@ class MenuManager:
         except Exception as e:
             print(f"КРИТИЧЕСКАЯ ОШИБКА при остановке воспроизведения: {e}")
             sentry_sdk.capture_exception(e)
+            
+            # В случае ошибки все равно деактивируем режим плеера
+            self.player_mode_active = False
             
             # В случае ошибки все равно пытаемся отобразить текущее меню
             self.display_current_menu()
@@ -1462,3 +1500,119 @@ class MenuManager:
             print(error_msg)
             sentry_sdk.capture_exception(e)
             return None
+
+    # Добавляем новый метод для обработки нажатий кнопок с учетом режима
+    def handle_button_press(self, button_id):
+        """
+        Обрабатывает нажатие кнопки пульта с учетом текущего режима (меню или аудиоплеер)
+        
+        Args:
+            button_id (str): Идентификатор нажатой кнопки
+            
+        Returns:
+            bool: True если кнопка была обработана
+        """
+        try:
+            # Получаем информацию о текущем режиме
+            is_player_mode = self.player_mode_active
+            is_recording = self.recording_state["active"]
+            is_playing = self.playback_state["active"]
+            
+            if self.debug:
+                print(f"Обработка нажатия кнопки: {button_id}")
+                print(f"Текущий режим: {'АУДИОПЛЕЕР' if is_player_mode else 'МЕНЮ'}")
+                print(f"Запись активна: {is_recording}, Воспроизведение активно: {is_playing}")
+            
+            # В режиме аудиоплеера обрабатываем кнопки по-особому
+            if is_player_mode and is_playing:
+                # Обработка кнопок в режиме аудиоплеера
+                if button_id == "KEY_UP":
+                    # Увеличиваем громкость
+                    self._adjust_volume(10)
+                    return True
+                    
+                elif button_id == "KEY_DOWN":
+                    # Уменьшаем громкость
+                    self._adjust_volume(-10)
+                    return True
+                    
+                elif button_id == "KEY_LEFT":
+                    # Переход к предыдущему файлу
+                    self._prev_file()
+                    return True
+                    
+                elif button_id == "KEY_RIGHT":
+                    # Переход к следующему файлу
+                    self._next_file()
+                    return True
+                    
+                elif button_id == "KEY_SELECT":
+                    # Пауза/продолжить воспроизведение
+                    self._toggle_pause_playback()
+                    return True
+                    
+                elif button_id == "KEY_BACK":
+                    # Остановка воспроизведения и возврат в меню
+                    self._stop_playback()
+                    return True
+                    
+                elif button_id == "KEY_1":
+                    # Удаление текущего файла
+                    if self.playback_manager.is_delete_confirmation_active():
+                        # Подтверждаем удаление
+                        self._confirm_delete(True)
+                    else:
+                        # Инициируем удаление
+                        self._delete_current_file()
+                    return True
+                    
+                elif button_id == "KEY_2":
+                    # Отмена удаления
+                    if self.playback_manager.is_delete_confirmation_active():
+                        self._confirm_delete(False)
+                    return True
+                
+                # Все остальные кнопки игнорируем в режиме аудиоплеера
+                return True
+            
+            # В режиме записи тоже особая обработка
+            elif is_recording:
+                # Код обработки кнопок в режиме записи
+                if button_id == "KEY_SELECT":
+                    # Пауза/продолжить запись
+                    self._toggle_pause_recording()
+                    return True
+                    
+                elif button_id == "KEY_BACK":
+                    # Остановка записи
+                    self._stop_recording()
+                    return True
+                
+                # Игнорируем все остальные кнопки в режиме записи
+                return True
+            
+            # Обычный режим меню
+            else:
+                # Стандартная навигация по меню
+                if button_id == "KEY_UP":
+                    return self.move_up()
+                    
+                elif button_id == "KEY_DOWN":
+                    return self.move_down()
+                    
+                elif button_id == "KEY_SELECT":
+                    self.select_current_item()
+                    return True
+                    
+                elif button_id == "KEY_BACK":
+                    self.go_back()
+                    return True
+            
+            # Если дошли сюда, значит кнопка не была обработана
+            return False
+            
+        except Exception as e:
+            error_msg = f"Ошибка при обработке нажатия кнопки {button_id}: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return False

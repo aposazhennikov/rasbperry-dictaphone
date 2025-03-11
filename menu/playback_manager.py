@@ -501,24 +501,13 @@ class PlaybackManager:
             if self.debug:
                 print(f"Переключение паузы. Текущее состояние: {is_paused}")
                 
-            # Используем мужской голос для системных сообщений
-            voice_id = "ru-RU-Standard-D"
-                
             if is_paused:
                 # Возобновляем воспроизведение
                 if self.debug:
                     print("Возобновление воспроизведения")
-                    
-                # Озвучиваем возобновление
-                if self.tts_manager:
-                    try:
-                        if hasattr(self.tts_manager, 'play_speech_blocking'):
-                            self.tts_manager.play_speech_blocking("Возобновление воспроизведения", voice_id=voice_id)
-                        else:
-                            self.tts_manager.play_speech("Возобновление воспроизведения", voice_id=voice_id)
-                            time.sleep(1)
-                    except Exception as e:
-                        print(f"Ошибка при озвучивании возобновления: {e}")
+                
+                # !!! Важно: НЕ озвучиваем возобновление при снятии с паузы,
+                # чтобы избежать проблемы с перезапуском файла из-за озвучки
                 
                 # Возобновляем воспроизведение с текущей позиции
                 result = self.player.resume()
@@ -544,9 +533,9 @@ class PlaybackManager:
                 if self.tts_manager:
                     try:
                         if hasattr(self.tts_manager, 'play_speech_blocking'):
-                            self.tts_manager.play_speech_blocking("Пауза", voice_id=voice_id)
+                            self.tts_manager.play_speech_blocking("Пауза", voice_id=None)  # Используем текущий голос
                         else:
-                            self.tts_manager.play_speech("Пауза", voice_id=voice_id)
+                            self.tts_manager.play_speech("Пауза", voice_id=None)
                             time.sleep(0.5)
                     except Exception as e:
                         print(f"Ошибка при озвучивании паузы: {e}")
