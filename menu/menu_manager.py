@@ -1253,22 +1253,29 @@ class MenuManager:
                 # Получаем информацию о файле для озвучивания
                 file_info = self.playback_manager.get_current_file_info()
                 if file_info and self.tts_enabled:
-                    # Сначала озвучиваем название файла
+                    # Озвучиваем простое сообщение перед воспроизведением
                     voice = self.settings_manager.get_voice()
-                    message = f"Воспроизведение {file_info['description']}"
+                    message = "Воспроизведение"
                     print(f"Озвучивание сообщения перед воспроизведением: {message}")
                     
                     # Используем блокирующее воспроизведение, чтобы сообщение прозвучало полностью
+                    message_played = False
                     try:
                         if hasattr(self.tts_manager, 'play_speech_blocking'):
+                            print("Использую блокирующее воспроизведение сообщения...")
                             self.tts_manager.play_speech_blocking(message, voice_id=voice)
+                            message_played = True
                         else:
+                            print("Использую стандартное воспроизведение сообщения...")
                             self.tts_manager.play_speech(message, voice_id=voice)
-                            # Если блокирующий метод недоступен, добавляем паузу
-                            time.sleep(2)
+                            message_played = True
                     except Exception as e:
                         print(f"Ошибка при озвучивании перед воспроизведением: {e}")
-                        time.sleep(0.5)
+                    
+                    # Уменьшаем паузу до 1.5 секунд
+                    if message_played:
+                        print("Ожидание 1.5 секунды для завершения воспроизведения сообщения...")
+                        time.sleep(1.5)
                 
                 # Теперь начинаем воспроизведение
                 print("Начинаем воспроизведение файла...")
