@@ -468,15 +468,17 @@ class PlaybackManager:
             self.playback_info["active"] = False
             self.playback_info["paused"] = False
             
-            # Если воспроизведение завершилось успешно, автоматически переходим к следующему файлу
-            if success and self.current_index < len(self.files_list) - 1:
+            # Если воспроизведение завершилось успешно, озвучиваем "Прослушано"
+            if success:
                 if self.debug:
-                    print("Автоматический переход к следующему файлу")
-                self.move_to_next_file()
-            else:
-                # Иначе просто обновляем интерфейс
-                if self.update_callback:
-                    self.update_callback()
+                    print("Воспроизведение завершено успешно, озвучиваем 'Прослушано'")
+                if self.tts_manager:
+                    self.tts_manager.play_speech("Прослушано")
+            
+            # Обновляем интерфейс
+            if self.update_callback:
+                self.update_callback()
+                
         except Exception as e:
             error_msg = f"Ошибка при обработке завершения воспроизведения: {e}"
             print(error_msg)
