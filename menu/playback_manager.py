@@ -916,14 +916,41 @@ class PlaybackManager:
             if key_code == KEY_RIGHT:
                 if pressed != self.key_states["right_pressed"]:
                     self.key_states["right_pressed"] = pressed
-                    self.toggle_fast_playback(pressed)
+                    if pressed:
+                        if self.debug:
+                            print("Включение ускоренного воспроизведения (2x)")
+                        try:
+                            self.player.vlc_player.set_rate(2.0)
+                        except Exception as e:
+                            print(f"Ошибка при установке скорости: {e}")
+                            sentry_sdk.capture_exception(e)
+                    else:
+                        if self.debug:
+                            print("Возврат к нормальной скорости")
+                        try:
+                            self.player.vlc_player.set_rate(1.0)
+                        except Exception as e:
+                            print(f"Ошибка при установке скорости: {e}")
+                            sentry_sdk.capture_exception(e)
                     return True
                     
             elif key_code == KEY_LEFT:
                 if pressed != self.key_states["left_pressed"]:
                     self.key_states["left_pressed"] = pressed
                     if pressed:
-                        self.rewind(10)
+                        try:
+                            # Получаем текущую позицию в миллисекундах
+                            current_pos_ms = self.player.vlc_player.get_time()
+                            if current_pos_ms >= 0:
+                                # Отматываем на 10 секунд назад
+                                new_pos_ms = max(0, current_pos_ms - 10000)  # 10 секунд = 10000 мс
+                                if self.debug:
+                                    print(f"Перемотка назад: {current_pos_ms/1000:.1f}s -> {new_pos_ms/1000:.1f}s")
+                                self.player.vlc_player.set_time(new_pos_ms)
+                        except Exception as e:
+                            error_msg = f"Ошибка при перемотке назад: {e}"
+                            print(f"ОШИБКА: {error_msg}")
+                            sentry_sdk.capture_exception(e)
                     return True
             
             return False

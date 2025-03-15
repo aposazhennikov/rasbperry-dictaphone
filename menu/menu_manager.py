@@ -2108,14 +2108,24 @@ class MenuManager:
                         return True
                     return True
                     
-                elif button_id == "KEY_LEFT":
-                    # Переход к предыдущему файлу
-                    self._prev_file()
-                    return True
-                    
-                elif button_id == "KEY_RIGHT":
-                    # Переход к следующему файлу
-                    self._next_file()
+                elif button_id == "KEY_LEFT" or button_id == "KEY_RIGHT":
+                    # Передаем управление перемоткой в PlaybackManager
+                    try:
+                        # Получаем код клавиши из строкового идентификатора
+                        key_codes = {
+                            "KEY_LEFT": 105,
+                            "KEY_RIGHT": 106
+                        }
+                        key_code = key_codes.get(button_id)
+                        if key_code:
+                            if self.debug:
+                                print(f"Передача управления перемоткой в PlaybackManager: {button_id}")
+                            self.playback_manager.handle_key_press(key_code, True)
+                            return True
+                    except Exception as e:
+                        error_msg = f"Ошибка при обработке перемотки: {e}"
+                        print(f"ОШИБКА: {error_msg}")
+                        sentry_sdk.capture_exception(e)
                     return True
                     
                 elif button_id == "KEY_SELECT":

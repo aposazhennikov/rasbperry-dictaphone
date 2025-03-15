@@ -111,36 +111,57 @@ class InputHandler:
                 if not self.running:
                     break
                     
-                if event.type == ecodes.EV_KEY:
-                    self.process_key_event(event)
+                self.handle_event(event)
         except Exception as e:
             error_msg = f"Ошибка в цикле обработки ввода: {e}"
             print(error_msg)
             sentry_sdk.capture_exception(e)
             
-    def process_key_event(self, event):
+    def handle_event(self, event):
         """
-        Обрабатывает событие клавиши
+        Обрабатывает событие от устройства ввода
         
         Args:
-            event: Событие ввода
+            event: Событие от устройства
         """
         try:
-            # 1 - нажатие, 0 - отпускание
-            key_code = event.code
-            key_state = event.value
-            
-            if self.debug:
-                action = "нажата" if key_state == 1 else "отпущена" if key_state == 0 else "удерживается"
-                print(f"Клавиша {key_code} {action}")
-            
-            # Обработка нажатий клавиш
-            if key_state == 1:  # Нажатие
-                self._handle_key_press(key_code)
-            elif key_state == 0:  # Отпускание
-                self._handle_key_release(key_code)
+            if event.type == ecodes.EV_KEY:
+                key_code = event.code
+                key_id = self._get_key_id(key_code)
+                
+                if self.debug:
+                    print(f"\nСобытие клавиши: {key_id} (код: {key_code}), значение: {event.value}")
+                
+                # Обработка нажатия
+                if event.value == 1:  # Нажатие
+                    # Сначала проверяем, не нужно ли передать событие в PlaybackManager
+                    playback_manager = getattr(self.menu_manager, 'playback_manager', None)
+                    if playback_manager and playback_manager.is_playing():
+                        if key_code in [KEY_LEFT, KEY_RIGHT]:
+                            if self.debug:
+                                print(f"Передача нажатия {key_id} в PlaybackManager")
+                            playback_manager.handle_key_press(key_code, True)
+                            return
+                    
+                    # Если не обработано PlaybackManager, передаем в MenuManager
+                    self.menu_manager.handle_button_press(key_id)
+                    
+                # Обработка отпускания
+                elif event.value == 0:  # Отпускание
+                    # Сначала проверяем PlaybackManager
+                    playback_manager = getattr(self.menu_manager, 'playback_manager', None)
+                    if playback_manager and playback_manager.is_playing():
+                        if key_code in [KEY_LEFT, KEY_RIGHT]:
+                            if self.debug:
+                                print(f"Передача отпускания {key_id} в PlaybackManager")
+                            playback_manager.handle_key_press(key_code, False)
+                            return
+                    
+                    # Если не обработано PlaybackManager, обрабатываем стандартно
+                    self._handle_key_release(key_code)
+                    
         except Exception as e:
-            error_msg = f"Ошибка при обработке события клавиши: {e}"
+            error_msg = f"Ошибка при обработке события: {e}"
             print(error_msg)
             sentry_sdk.capture_exception(e)
             
