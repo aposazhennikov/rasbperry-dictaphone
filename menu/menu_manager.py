@@ -1691,6 +1691,11 @@ class MenuManager:
                 sentry_sdk.capture_message(error_msg, level='warning')
                 return
             
+            # Сохраняем текущую папку перед удалением
+            current_folder = self.playback_manager.current_folder
+            if self.debug:
+                print(f"Текущая папка перед удалением: {current_folder}")
+            
             # Подтверждаем или отменяем удаление
             try:
                 result = self.playback_manager.confirm_delete(confirmed)
@@ -1699,11 +1704,78 @@ class MenuManager:
                     message=f'Результат confirm_delete: {result}',
                     level='info'
                 )
+                
+                # Если файл был удален, обновляем список файлов и создаем новое меню
+                if confirmed and result:
+                    if self.debug:
+                        print("Файл удален, обновляем список файлов")
+                    
+                    try:
+                        # Создаем новое меню с обновленным списком файлов
+                        files_menu = SubMenu(f"Записи в папке {current_folder}")
+                        
+                        # Перезагружаем список файлов для текущей папки
+                        if self.playback_manager.load_folder(current_folder, return_to_menu=files_menu):
+                            # Получаем обновленный список файлов
+                            files_count = self.playback_manager.get_files_count()
+                            
+                            if self.debug:
+                                print(f"Найдено {files_count} файлов после удаления")
+                            
+                            # Добавляем файлы в новое меню
+                            for i in range(files_count):
+                                file_info = self.playback_manager.get_file_info(i)
+                                if file_info:
+                                    file_item = MenuItem(file_info["description"], 
+                                                       lambda idx=i: self._play_file(idx))
+                                    files_menu.add_item(file_item)
+                            
+                            # Устанавливаем родительское меню
+                            if self.current_menu and self.current_menu.parent:
+                                files_menu.parent = self.current_menu.parent
+                            
+                            # Переключаемся на обновленное меню
+                            self.current_menu = files_menu
+                            
+                            # Деактивируем режим плеера
+                            self.player_mode_active = False
+                            
+                            # Отображаем обновленное меню
+                            self.display_current_menu()
+                            
+                            sentry_sdk.add_breadcrumb(
+                                category='delete',
+                                message='Список файлов успешно обновлен после удаления',
+                                level='info',
+                                data={'files_count': files_count}
+                            )
+                        else:
+                            if self.debug:
+                                print(f"Папка {current_folder} пуста после удаления")
+                            
+                            # Если папка пуста, показываем сообщение
+                            message = f"В папке {current_folder} нет записей"
+                            self.display_manager.display_message(message)
+                            
+                            if self.tts_enabled:
+                                voice = self.settings_manager.get_voice()
+                                self.tts_manager.play_speech(message, voice_id=voice)
+                            
+                            # Возвращаемся в родительское меню
+                            if self.current_menu and self.current_menu.parent:
+                                self.current_menu = self.current_menu.parent
+                                self.display_current_menu()
+                    
+                    except Exception as update_error:
+                        error_msg = f"Ошибка при обновлении списка файлов: {str(update_error)}"
+                        print(f"ОШИБКА: {error_msg}")
+                        sentry_sdk.capture_exception(update_error)
+                
             except Exception as delete_error:
                 error_msg = f"Ошибка при подтверждении/отмене удаления в playback_manager: {str(delete_error)}"
                 print(f"ОШИБКА: {error_msg}")
                 sentry_sdk.capture_exception(delete_error)
-                raise  # Пробрасываем исключение дальше для общей обработки
+                raise
             
             # Если отменили удаление - гарантируем, что мы остаемся в режиме воспроизведения
             if not confirmed:
