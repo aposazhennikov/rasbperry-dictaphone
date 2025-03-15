@@ -2092,38 +2092,24 @@ class MenuManager:
                     self.playback_manager.adjust_volume(10)
                     return True
                     
-                elif button_id == "KEY_UP":
-                    # Навигация вверх в меню подтверждения
-                    if self.playback_manager.is_delete_confirmation_active():
-                        self.playback_manager.confirm_delete_selected = "Да" if self.playback_manager.confirm_delete_selected == "Нет" else "Нет"
-                        self.tts_manager.play_speech(self.playback_manager.confirm_delete_selected)
-                        return True
-                    return True
-                    
-                elif button_id == "KEY_DOWN":
-                    # Навигация вниз в меню подтверждения
-                    if self.playback_manager.is_delete_confirmation_active():
-                        self.playback_manager.confirm_delete_selected = "Да" if self.playback_manager.confirm_delete_selected == "Нет" else "Нет"
-                        self.tts_manager.play_speech(self.playback_manager.confirm_delete_selected)
-                        return True
-                    return True
-                    
-                elif button_id == "KEY_LEFT" or button_id == "KEY_RIGHT":
-                    # Передаем управление перемоткой в PlaybackManager
+                elif button_id == "KEY_VOLUMEUP" or button_id == "KEY_VOLUMEDOWN" or button_id == "KEY_LEFT" or button_id == "KEY_RIGHT":
+                    # Передаем управление в PlaybackManager
                     try:
                         # Получаем код клавиши из строкового идентификатора
                         key_codes = {
                             "KEY_LEFT": 105,
-                            "KEY_RIGHT": 106
+                            "KEY_RIGHT": 106,
+                            "KEY_VOLUMEUP": 115,
+                            "KEY_VOLUMEDOWN": 114
                         }
                         key_code = key_codes.get(button_id)
                         if key_code:
                             if self.debug:
-                                print(f"Передача управления перемоткой в PlaybackManager: {button_id}")
+                                print(f"Передача управления в PlaybackManager: {button_id}")
                             self.playback_manager.handle_key_press(key_code, True)
                             return True
                     except Exception as e:
-                        error_msg = f"Ошибка при обработке перемотки: {e}"
+                        error_msg = f"Ошибка при обработке кнопки {button_id}: {e}"
                         print(f"ОШИБКА: {error_msg}")
                         sentry_sdk.capture_exception(e)
                     return True

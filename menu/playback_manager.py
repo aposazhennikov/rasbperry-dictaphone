@@ -591,7 +591,7 @@ class PlaybackManager:
             if self.debug:
                 print("\n*** ПОПЫТКА ВОЗОБНОВЛЕНИЯ ВОСПРОИЗВЕДЕНИЯ ***")
                 print(f"Текущее состояние: active={self.playback_info['active']}, paused={self.playback_info['paused']}")
-                print(f"Плеер: active={self.player.is_active()}, on_pause={self.player.is_on_pause() if hasattr(self.player, 'is_on_pause') else 'метод недоступен'}")
+                print(f"Player: active={self.player.is_active()}, on_pause={self.player.is_on_pause() if hasattr(self.player, 'is_on_pause') else 'метод недоступен'}")
                 print(f"Текущая позиция: {self.player.get_current_position() if hasattr(self.player, 'get_current_position') else 'неизвестно'}")
                 
             # Проверяем состояние воспроизведения
@@ -840,6 +840,8 @@ class PlaybackManager:
             KEY_PAGEUP = 104  # Уменьшение громкости
             KEY_PAGEDOWN = 109 # Увеличение громкости
             KEY_POWER = 116   # Удаление файла
+            KEY_VOLUMEUP = 115   # Следующий трек
+            KEY_VOLUMEDOWN = 114 # Предыдущий трек
             
             if self.debug:
                 print(f"Обработка клавиши {key_code}, pressed={pressed}")
@@ -878,8 +880,159 @@ class PlaybackManager:
                 
             # Обработка однократных нажатий (только при нажатии, не при отпускании)
             if pressed:
+                # Переключение треков
+                if key_code == KEY_VOLUMEUP:
+                    try:
+                        if self.debug:
+                            print("Переключение на следующий трек")
+                        
+                        # Проверяем, есть ли следующий трек
+                        next_index = (self.current_index + 1) % len(self.files_list)
+                        if next_index == 0 and self.current_index == len(self.files_list) - 1:
+                            # Мы на последнем треке
+                            message = "Достигнут конец списка воспроизведения"
+                            if self.debug:
+                                print(message)
+                            if self.tts_manager:
+                                self.tts_manager.play_speech(message)
+                            sentry_sdk.add_breadcrumb(
+                                category='playback',
+                                message='Попытка переключения вперед на последнем треке',
+                                level='info'
+                            )
+                            return True
+                        
+                        # Останавливаем текущее воспроизведение
+                        if self.player.is_active():
+                            self.player.stop()
+                        
+                        # Получаем информацию о следующем треке перед переключением
+                        next_file_info = self.get_file_info(next_index)
+                        
+                        if next_file_info:
+                            # Озвучиваем переключение и ждем завершения
+                            message = f"Переключаю вперед на {next_file_info['description']}"
+                            if self.tts_manager:
+                                if self.debug:
+                                    print(f"Воспроизведение сообщения: {message}")
+                                try:
+                                    # Останавливаем текущее воспроизведение перед системным сообщением
+                                    if self.player.is_active():
+                                        self.player.stop()
+                                    
+                                    # Используем блокирующий метод для гарантированного завершения системного сообщения
+                                    if self.debug:
+                                        print("Воспроизведение системного сообщения (блокирующий режим)")
+                                    self.tts_manager.play_speech_blocking(message)
+                                    
+                                    # Дополнительная пауза после системного сообщения
+                                    time.sleep(0.5)
+                                    
+                                except Exception as e:
+                                    print(f"Ошибка при озвучивании сообщения: {e}")
+                                    sentry_sdk.capture_exception(e)
+                            
+                            # Переключаем трек
+                            self.current_index = next_index
+                            
+                            # Начинаем воспроизведение нового трека
+                            if self.debug:
+                                print("Начинаем воспроизведение нового трека")
+                            self.play_current_file()
+                            
+                            # Добавляем информацию в Sentry
+                            sentry_sdk.add_breadcrumb(
+                                category='playback',
+                                message=f'Переключение на следующий трек: {next_file_info["description"]}',
+                                level='info'
+                            )
+                        
+                        return True
+                    except Exception as e:
+                        error_msg = f"Ошибка при переключении на следующий трек: {str(e)}"
+                        print(f"ОШИБКА: {error_msg}")
+                        sentry_sdk.capture_exception(e)
+                        if self.tts_manager:
+                            self.tts_manager.play_speech("Ошибка при переключении трека")
+                        return False
+                    
+                elif key_code == KEY_VOLUMEDOWN:
+                    try:
+                        if self.debug:
+                            print("Переключение на предыдущий трек")
+                        
+                        # Проверяем, есть ли предыдущий трек
+                        prev_index = (self.current_index - 1) % len(self.files_list)
+                        if prev_index == len(self.files_list) - 1 and self.current_index == 0:
+                            # Мы на первом треке
+                            message = "Достигнуто начало списка воспроизведения"
+                            if self.debug:
+                                print(message)
+                            if self.tts_manager:
+                                self.tts_manager.play_speech_blocking(message)
+                            sentry_sdk.add_breadcrumb(
+                                category='playback',
+                                message='Попытка переключения назад на первом треке',
+                                level='info'
+                            )
+                            return True
+                        
+                        # Останавливаем текущее воспроизведение
+                        if self.player.is_active():
+                            self.player.stop()
+                        
+                        # Получаем информацию о предыдущем треке перед переключением
+                        prev_file_info = self.get_file_info(prev_index)
+                        
+                        if prev_file_info:
+                            # Озвучиваем переключение и ждем завершения
+                            message = f"Переключаю назад на {prev_file_info['description']}"
+                            if self.tts_manager:
+                                if self.debug:
+                                    print(f"Воспроизведение сообщения: {message}")
+                                try:
+                                    # Останавливаем текущее воспроизведение перед системным сообщением
+                                    if self.player.is_active():
+                                        self.player.stop()
+                                    
+                                    # Используем блокирующий метод для гарантированного завершения системного сообщения
+                                    if self.debug:
+                                        print("Воспроизведение системного сообщения (блокирующий режим)")
+                                    self.tts_manager.play_speech_blocking(message)
+                                    
+                                    # Дополнительная пауза после системного сообщения
+                                    time.sleep(0.5)
+                                    
+                                except Exception as e:
+                                    print(f"Ошибка при озвучивании сообщения: {e}")
+                                    sentry_sdk.capture_exception(e)
+                            
+                            # Переключаем трек
+                            self.current_index = prev_index
+                            
+                            # Начинаем воспроизведение нового трека
+                            if self.debug:
+                                print("Начинаем воспроизведение нового трека")
+                            self.play_current_file()
+                            
+                            # Добавляем информацию в Sentry
+                            sentry_sdk.add_breadcrumb(
+                                category='playback',
+                                message=f'Переключение на предыдущий трек: {prev_file_info["description"]}',
+                                level='info'
+                            )
+                        
+                        return True
+                    except Exception as e:
+                        error_msg = f"Ошибка при переключении на предыдущий трек: {str(e)}"
+                        print(f"ОШИБКА: {error_msg}")
+                        sentry_sdk.capture_exception(e)
+                        if self.tts_manager:
+                            self.tts_manager.play_speech("Ошибка при переключении трека")
+                        return False
+                
                 # Пауза/воспроизведение
-                if key_code == KEY_SELECT:
+                elif key_code == KEY_SELECT:
                     if self.debug:
                         print("Нажата клавиша PAUSE/PLAY")
                     self.toggle_pause()

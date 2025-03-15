@@ -13,6 +13,8 @@ KEY_RIGHT = 106
 KEY_POWER = 116   # Клавиша питания для удаления файлов
 KEY_PAGEUP = 104  # Клавиша Page Up для перехода к предыдущему файлу
 KEY_PAGEDOWN = 109  # Клавиша Page Down для перехода к следующему файлу
+KEY_VOLUMEUP = 115  # Клавиша Volume Up
+KEY_VOLUMEDOWN = 114  # Клавиша Volume Down
 
 class InputHandler:
     """Класс для обработки ввода с пульта"""
@@ -137,7 +139,7 @@ class InputHandler:
                     # Сначала проверяем, не нужно ли передать событие в PlaybackManager
                     playback_manager = getattr(self.menu_manager, 'playback_manager', None)
                     if playback_manager and playback_manager.is_playing():
-                        if key_code in [KEY_LEFT, KEY_RIGHT]:
+                        if key_code in [KEY_LEFT, KEY_RIGHT, KEY_VOLUMEUP, KEY_VOLUMEDOWN]:
                             if self.debug:
                                 print(f"Передача нажатия {key_id} в PlaybackManager")
                             playback_manager.handle_key_press(key_code, True)
@@ -229,6 +231,8 @@ class InputHandler:
             KEY_POWER: "KEY_POWER",
             KEY_PAGEUP: "KEY_PAGEUP",
             KEY_PAGEDOWN: "KEY_PAGEDOWN",
+            KEY_VOLUMEUP: "KEY_VOLUMEUP",
+            KEY_VOLUMEDOWN: "KEY_VOLUMEDOWN",
             49: "KEY_1",  # Клавиша 1
             50: "KEY_2",  # Клавиша 2
             51: "KEY_3",  # Клавиша 3
