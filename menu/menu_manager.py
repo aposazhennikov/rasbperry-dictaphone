@@ -825,17 +825,19 @@ class MenuManager:
 
         # - Подменю управления громкостью системных сообщений
         volume_menu = SubMenu("Громкость системных сообщений", parent=settings_menu)
+        # Добавляем обработчик входа в меню для озвучивания текущей громкости
+        volume_menu.on_enter = lambda: self._announce_current_volume()
         settings_menu.add_item(volume_menu)
         
-        # -- Добавляем пункты управления громкостью (от 10% до 100% с шагом 10%)
-        for volume in range(10, 101, 10):
-            def create_volume_action(vol=volume):
-                return lambda: self.change_system_volume(vol)
-                
-            volume_menu.add_item(MenuItem(
-                f"{volume}% громкости", 
-                create_volume_action()
-            ))
+        # -- Добавляем пункты управления громкостью (7 уровней от 0 до 6)
+        for level in range(7):
+            volume_item = MenuItem(
+                f"Уровень громкости {level}",
+                lambda lvl=level: self.change_system_volume(lvl)
+            )
+            # Добавляем обработчик наведения курсора
+            volume_item.on_focus = lambda lvl=level: self.preview_system_volume(lvl)
+            volume_menu.add_item(volume_item)
         
         # Устанавливаем главное меню как корневое
         self.set_root_menu(main_menu)
@@ -2200,3 +2202,135 @@ class MenuManager:
             return "файла"
         else:
             return "файлов"
+
+    def _announce_current_volume(self):
+        """
+        Озвучивает текущую громкость системных сообщений
+        """
+        try:
+            # Получаем текущую громкость в процентах
+            current_volume = self.settings_manager.get_system_volume()
+            
+            # Преобразуем проценты в уровень (0-6)
+            level = (current_volume - 40) // 10
+            if level < 0:
+                level = 0
+            elif level > 6:
+                level = 6
+                
+            # Озвучиваем текущий уровень блокирующим методом
+            self.tts_manager.play_speech_blocking(f"Сейчас установлен уровень громкости {level}")
+            
+        except Exception as e:
+            error_msg = f"Ошибка при озвучивании текущей громкости: {e}"
+            print(f"[MENU ERROR] {error_msg}")
+            sentry_sdk.capture_exception(e)
+
+    def change_system_volume(self, level):
+        """
+        Изменяет системную громкость
+        
+        Args:
+            level (int): Уровень громкости от 0 до 6
+        """
+        try:
+            # Проверяем, что уровень в допустимом диапазоне
+            if not (0 <= level <= 6):
+                print(f"[MENU ERROR] Некорректный уровень громкости: {level}")
+                return
+                
+            # Преобразуем уровень в проценты (40% - 100%)
+            volume = 40 + (level * 10)  # 0->40%, 1->50%, ..., 6->100%
+            
+            # Сохраняем новую громкость в настройках
+            self.settings_manager.set_system_volume(volume)
+            
+            # Воспроизводим подтверждающее сообщение
+            self.tts_manager.speak_text(f"Установлен уровень громкости {level}")
+            
+        except Exception as e:
+            error_msg = f"Ошибка при изменении громкости: {e}"
+            print(f"[MENU ERROR] {error_msg}")
+            sentry_sdk.capture_exception(e)
+
+    def preview_system_volume(self, level):
+        """
+        Воспроизводит тестовое сообщение с указанной громкостью
+        
+        Args:
+            level (int): Уровень громкости от 0 до 6
+        """
+        try:
+            # Сохраняем текущую громкость
+            current_volume = self.settings_manager.get_system_volume()
+            
+            # Преобразуем уровень в проценты (40% - 100%)
+            volume = 40 + (level * 10)  # 0->40%, 1->50%, ..., 6->100%
+            
+            # Временно устанавливаем новую громкость в настройках
+            self.settings_manager.set_system_volume(volume)
+            
+            # Временно устанавливаем новую громкость в TTS менеджере
+            if hasattr(self.tts_manager, 'set_volume'):
+                self.tts_manager.set_volume(volume)
+            
+            # Воспроизводим тестовое сообщение
+            self.tts_manager.speak_text(f"Уровень громкости {level}")
+            
+            # Восстанавливаем исходную громкость в настройках
+            self.settings_manager.set_system_volume(current_volume)
+            
+            # Восстанавливаем исходную громкость в TTS менеджере
+            if hasattr(self.tts_manager, 'set_volume'):
+                self.tts_manager.set_volume(current_volume)
+            
+        except Exception as e:
+            error_msg = f"Ошибка при предпросмотре громкости: {e}"
+            print(f"[MENU ERROR] {error_msg}")
+            sentry_sdk.capture_exception(e)
+
+    def show_settings_menu(self):
+        """Показывает меню настроек"""
+        try:
+            while True:
+                self.clear_screen()
+                print("\n=== Настройки ===\n")
+                print("1. Выбор голоса")
+                print("2. Выбор движка TTS")
+                print("3. Управление громкостью")
+                print("0. Назад")
+                
+                choice = input("\nВыберите пункт меню: ")
+                
+                if choice == "1":
+                    self.change_voice()
+                elif choice == "2":
+                    self.change_tts_engine()
+                elif choice == "3":
+                    self.change_system_volume()
+                elif choice == "0":
+                    break
+                else:
+                    print("\nНеверный выбор. Попробуйте снова.")
+                    time.sleep(1)
+        except Exception as e:
+            error_msg = f"Ошибка в меню настроек: {e}"
+            print(f"\n[MENU ERROR] {error_msg}")
+            sentry_sdk.capture_exception(e)
+            sentry_sdk.capture_message(error_msg, level="error")
+            time.sleep(2)
+    
+    def clear_screen(self):
+        """Очищает экран консоли"""
+        try:
+            # Для Windows
+            if os.name == 'nt':
+                os.system('cls')
+            # Для Unix/Linux/MacOS
+            else:
+                os.system('clear')
+        except Exception as e:
+            if self.debug:
+                print(f"Ошибка при очистке экрана: {e}")
+            # Если не удалось очистить экран, печатаем пустые строки
+            print("\n" * 100)

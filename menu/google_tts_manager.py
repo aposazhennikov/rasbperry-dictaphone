@@ -27,7 +27,7 @@ class GoogleTTSManager:
     FREE_MONTHLY_CHARS = 1000000  # 1 миллион символов
     
     def __init__(self, cache_dir="/home/aleks/cache_tts", credentials_file="credentials-google-api.json", 
-                 lang="ru-RU", debug=False, use_wav=True, voice="ru-RU-Standard-A"):
+                 lang="ru-RU", debug=False, use_wav=True, voice="ru-RU-Standard-A", settings_manager=None):
         """
         Инициализация менеджера Google TTS
         
@@ -38,6 +38,7 @@ class GoogleTTSManager:
             debug (bool): Режим отладки
             use_wav (bool): Использовать WAV вместо MP3 для более быстрого воспроизведения
             voice (str): Идентификатор голоса для озвучки
+            settings_manager (SettingsManager): Менеджер настроек
         """
         try:
             self.cache_dir = cache_dir
@@ -48,7 +49,7 @@ class GoogleTTSManager:
             self.cache_lock = threading.Lock()
             self.debug = debug
             self.use_wav = use_wav
-            self.voice = voice
+            self.settings_manager = settings_manager
             self.monitoring_client = None
             self.project_id = None
             self.monthly_chars_used = 0
@@ -111,6 +112,28 @@ class GoogleTTSManager:
             
             if self.debug:
                 print(f"GoogleTTSManager инициализирован. Голос по умолчанию: {voice}")
+            
+            # Определяем голос - берем из настроек, если доступны, иначе используем значение по умолчанию
+            if self.settings_manager:
+                try:
+                    self.voice = self.settings_manager.get_voice()
+                    print(f"[GOOGLE TTS INIT] Установлен голос из настроек: {self.voice}")
+                    sentry_sdk.add_breadcrumb(
+                        category="voice",
+                        message=f"Google TTS Manager: Голос установлен из настроек: {self.voice}",
+                        level="info"
+                    )
+                except Exception as voice_error:
+                    error_msg = f"Ошибка при получении голоса из настроек: {voice_error}"
+                    print(f"[GOOGLE TTS INIT ERROR] {error_msg}")
+                    sentry_sdk.capture_exception(voice_error)
+                    # Используем значение по умолчанию
+                    self.voice = voice
+                    print(f"[GOOGLE TTS INIT] Используем голос по умолчанию: {self.voice}")
+            else:
+                # Если нет settings_manager, используем значение параметра
+                self.voice = voice
+                print(f"[GOOGLE TTS INIT] Используем голос из параметра: {self.voice}")
         except Exception as e:
             error_msg = f"Ошибка при инициализации GoogleTTSManager: {e}"
             print(error_msg)
@@ -638,59 +661,91 @@ class GoogleTTSManager:
             "last_update": self.last_metrics_update.strftime("%Y-%m-%d %H:%M:%S") if self.last_metrics_update else "Никогда"
         }
     
-    def play_speech(self, text, voice=None):
+    def play_speech(self, text, voice=None, blocking=False):
         """
         Воспроизводит озвученный текст
         
         Args:
             text (str): Текст для озвучки
             voice (str, optional): Идентификатор голоса
+            blocking (bool): Ожидать окончания воспроизведения
             
         Returns:
             bool: True если воспроизведение запущено, иначе False
         """
-        # Используем указанный голос или текущий по умолчанию
-        if voice is None:
-            voice = self.voice
-            
-        # Если уже что-то воспроизводится, останавливаем
-        self.stop_current_sound()
-        
-        # Генерируем озвучку
-        audio_file = self.generate_speech(text, force_regenerate=False, voice=voice)
-        if not audio_file:
-            return False
-            
         try:
-            # Запускаем процесс воспроизведения звука
-            if self.use_wav:
-                # Для WAV используем paplay или aplay
-                try:
-                    self.current_sound_process = subprocess.Popen(
-                        ["paplay", audio_file],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                    )
-                except:
-                    # Если paplay не доступен, пробуем aplay
-                    self.current_sound_process = subprocess.Popen(
-                        ["aplay", audio_file],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                    )
-            else:
-                # Для MP3 используем mpg123
-                self.current_sound_process = subprocess.Popen(
-                    ["mpg123", audio_file],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                )
+            # Используем указанный голос или текущий по умолчанию
+            if voice is None:
+                voice = self.voice
                 
-            # Запускаем поток ожидания завершения воспроизведения
-            self.is_playing = True
-            wait_thread = threading.Thread(target=self.wait_completion, daemon=True)
-            wait_thread.start()
+            # Если уже что-то воспроизводится, останавливаем
+            self.stop_current_sound()
             
-            return True
+            # Генерируем озвучку
+            audio_file = self.generate_speech(text, force_regenerate=False, voice=voice)
+            if not audio_file:
+                return False
+                
+            try:
+                # Получаем текущий уровень громкости из настроек
+                volume = 100
+                if self.settings_manager:
+                    try:
+                        volume = self.settings_manager.get_system_volume()
+                    except Exception as vol_error:
+                        print(f"[GOOGLE TTS WARNING] Ошибка при получении громкости: {vol_error}")
+                        sentry_sdk.capture_exception(vol_error)
+                
+                # Нормализуем громкость в диапазон 0-1 с экспоненциальной шкалой
+                # Используем экспоненциальную шкалу для более естественного изменения громкости
+                volume_exp = (volume / 100.0) ** 2
+                
+                # Запускаем процесс воспроизведения звука с указанной громкостью
+                if self.use_wav:
+                    # Для WAV используем paplay или aplay с контролем громкости
+                    try:
+                        # paplay использует линейную шкалу от 0 до 65536
+                        volume_paplay = int(volume_exp * 65536)
+                        self.current_sound_process = subprocess.Popen(
+                            ["paplay", "--volume", str(volume_paplay), audio_file],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                        )
+                    except:
+                        # Если paplay не доступен, пробуем aplay с softvol
+                        # aplay использует линейную шкалу от 0 до 100
+                        volume_aplay = int(volume_exp * 100)
+                        self.current_sound_process = subprocess.Popen(
+                            ["aplay", "-D", f"softvol,softvol=volume={volume_aplay}", audio_file],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                        )
+                else:
+                    # Для MP3 используем mpg123 с контролем громкости
+                    # mpg123 использует линейную шкалу от 0 до 32768
+                    volume_mpg123 = int(volume_exp * 32768)
+                    self.current_sound_process = subprocess.Popen(
+                        ["mpg123", "-f", str(volume_mpg123), audio_file],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                    )
+                    
+                # Запускаем поток ожидания завершения воспроизведения
+                self.is_playing = True
+                wait_thread = threading.Thread(target=self.wait_completion, daemon=True)
+                wait_thread.start()
+                
+                # Если нужен блокирующий режим, ждем завершения
+                if blocking:
+                    wait_thread.join()
+                
+                return True
+            except Exception as e:
+                error_msg = f"Ошибка при воспроизведении звука: {e}"
+                print(f"[GOOGLE TTS ERROR] {error_msg}")
+                sentry_sdk.capture_exception(e)
+                return False
         except Exception as e:
-            print(f"Ошибка при воспроизведении звука: {e}")
+            error_msg = f"Ошибка при воспроизведении речи: {e}"
+            print(f"[GOOGLE TTS ERROR] {error_msg}")
+            sentry_sdk.capture_exception(e)
             return False
     
     def wait_completion(self):

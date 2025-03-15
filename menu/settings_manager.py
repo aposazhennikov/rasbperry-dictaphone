@@ -22,7 +22,8 @@ class SettingsManager:
             self.settings = {
                 "voice": "ru-RU-Standard-A",
                 "tts_engine": "gtts",
-                "google_cloud_credentials": None
+                "google_cloud_credentials": None,
+                "system_volume": 100  # Добавляем настройку громкости по умолчанию
             }
             
             # Создаем директорию для файла настроек, если её нет
@@ -250,4 +251,90 @@ class SettingsManager:
             "ru-RU-Standard-C": "Женский голос 2",
             "ru-RU-Standard-D": "Мужской голос 2",
             "ru-RU-Standard-E": "Женский голос 3"
-        } 
+        }
+
+    def get_system_volume(self):
+        """
+        Возвращает текущую громкость системных сообщений
+        
+        Returns:
+            int: Уровень громкости в процентах (10-100)
+        """
+        try:
+            volume = self.settings.get("system_volume", 100)
+            # Убеждаемся, что значение в допустимом диапазоне
+            return max(10, min(100, volume))
+        except Exception as e:
+            error_msg = f"Ошибка при получении громкости: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return 100  # Возвращаем максимальную громкость в случае ошибки
+            
+    def set_system_volume(self, volume):
+        """
+        Устанавливает громкость системных сообщений
+        
+        Args:
+            volume (int): Уровень громкости в процентах (10-100)
+            
+        Returns:
+            bool: True если успешно, иначе False
+        """
+        try:
+            # Логируем начало процесса
+            sentry_sdk.add_breadcrumb(
+                category="volume",
+                message=f"Settings Manager: Начало установки громкости {volume}%",
+                level="info"
+            )
+            print(f"[SETTINGS] Запрос на установку громкости: {volume}%")
+            
+            # Проверяем корректность значения
+            if not isinstance(volume, (int, float)) or not (10 <= volume <= 100):
+                error_msg = f"Settings Manager: Некорректное значение громкости: {volume}%"
+                print(f"[SETTINGS ERROR] {error_msg}")
+                sentry_sdk.capture_message(error_msg, level="error")
+                return False
+            
+            # Сохраняем текущее значение для возможного восстановления
+            old_volume = self.get_system_volume()
+            
+            # Устанавливаем новое значение
+            self.settings["system_volume"] = int(volume)
+            
+            # Сохраняем настройки в файл
+            try:
+                self.save_settings()
+                print(f"[SETTINGS] Настройки сохранены в файл")
+            except Exception as save_error:
+                error_msg = f"Ошибка при сохранении настроек: {save_error}"
+                print(f"[SETTINGS ERROR] {error_msg}")
+                sentry_sdk.capture_exception(save_error)
+                # Восстанавливаем старое значение
+                self.settings["system_volume"] = old_volume
+                return False
+            
+            # Проверяем, что громкость действительно установлена
+            new_volume = self.get_system_volume()
+            if new_volume != volume:
+                error_msg = f"Settings Manager: Громкость не была установлена: ожидалось {volume}%, получено {new_volume}%"
+                print(f"[SETTINGS ERROR] {error_msg}")
+                sentry_sdk.capture_message(error_msg, level="error")
+                return False
+            
+            print(f"[SETTINGS] Громкость успешно установлена: {volume}%")
+            
+            # Логируем успешную установку громкости
+            sentry_sdk.add_breadcrumb(
+                category="volume",
+                message=f"Settings Manager: Громкость успешно изменена с {old_volume}% на {new_volume}%",
+                level="info"
+            )
+            
+            return True
+            
+        except Exception as e:
+            error_msg = f"Критическая ошибка при установке громкости в настройках: {e}"
+            print(f"[SETTINGS CRITICAL ERROR] {error_msg}")
+            sentry_sdk.capture_exception(e)
+            return False 

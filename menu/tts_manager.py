@@ -150,28 +150,30 @@ class TTSManager:
                     lang=self.lang,
                     debug=self.debug,
                     use_wav=self.use_wav,
-                    voice=self.voice
+                    voice=self.voice,
+                    settings_manager=self.settings_manager
                 )
                 
                 if self.debug:
-                    print(f"Google Cloud TTS менеджер инициализирован успешно")
+                    print("Google Cloud TTS менеджер успешно инициализирован")
+                    
+                # Устанавливаем движок TTS в google_cloud
+                self.tts_engine = "google_cloud"
+                
             else:
-                print("Библиотека Google Cloud Text-to-Speech не установлена")
-                print("Для установки выполните: pip install google-cloud-texttospeech")
-                # Переключаемся на gTTS
-                self.tts_engine = "gtts"
-                if self.settings_manager:
-                    self.settings_manager.set_tts_engine("gtts")
+                error_msg = "Модуль google.cloud.texttospeech не найден"
+                print(f"[TTS ERROR] {error_msg}")
+                sentry_sdk.capture_message(error_msg, level="error")
+                
         except Exception as e:
-            print(f"Ошибка при инициализации Google Cloud TTS: {e}")
-            import traceback
-            print("Стек вызовов:")
-            traceback.print_exc()
+            error_msg = f"Ошибка при инициализации Google Cloud TTS: {e}"
+            print(f"[TTS ERROR] {error_msg}")
             sentry_sdk.capture_exception(e)
-            # Переключаемся на gTTS
+            traceback.print_exc()  # Печатаем полный стек ошибки
+            
+            # Возвращаемся к gTTS
             self.tts_engine = "gtts"
-            if self.settings_manager:
-                self.settings_manager.set_tts_engine("gtts")
+            print("[TTS INFO] Возврат к использованию gTTS")
     
     def set_tts_engine(self, engine):
         """
@@ -583,7 +585,7 @@ class TTSManager:
                 
             # Если используем Google Cloud TTS, делегируем ему воспроизведение
             if self.tts_engine == "google_cloud" and self.google_tts_manager:
-                return self.google_tts_manager.play_speech(text, voice_id)
+                return self.google_tts_manager.play_speech(text, voice_id, blocking)
             
             # Используем указанный голос или текущий по умолчанию
             if voice_id is None:
@@ -598,24 +600,43 @@ class TTSManager:
                 return False
             
             try:
-                # Запускаем процесс воспроизведения звука
-                if self.use_wav:
-                    # Для WAV используем paplay или aplay
+                # Получаем текущий уровень громкости из настроек
+                volume = 100
+                if self.settings_manager:
                     try:
+                        volume = self.settings_manager.get_system_volume()
+                    except Exception as vol_error:
+                        print(f"[TTS WARNING] Ошибка при получении громкости: {vol_error}")
+                        sentry_sdk.capture_exception(vol_error)
+                
+                # Нормализуем громкость в диапазон 0-1 с экспоненциальной шкалой
+                # Используем экспоненциальную шкалу для более естественного изменения громкости
+                volume_exp = (volume / 100.0) ** 2
+                
+                # Запускаем процесс воспроизведения звука с указанной громкостью
+                if self.use_wav:
+                    # Для WAV используем paplay или aplay с контролем громкости
+                    try:
+                        # paplay использует линейную шкалу от 0 до 65536
+                        volume_paplay = int(volume_exp * 65536)
                         self.current_sound_process = subprocess.Popen(
-                            ["paplay", audio_file],
+                            ["paplay", "--volume", str(volume_paplay), audio_file],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                         )
                     except:
-                        # Если paplay не доступен, пробуем aplay
+                        # Если paplay не доступен, пробуем aplay с softvol
+                        # aplay использует линейную шкалу от 0 до 100
+                        volume_aplay = int(volume_exp * 100)
                         self.current_sound_process = subprocess.Popen(
-                            ["aplay", audio_file],
+                            ["aplay", "-D", f"softvol,softvol=volume={volume_aplay}", audio_file],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                         )
                 else:
-                    # Для MP3 используем mpg123
+                    # Для MP3 используем mpg123 с контролем громкости
+                    # mpg123 использует линейную шкалу от 0 до 32768
+                    volume_mpg123 = int(volume_exp * 32768)
                     self.current_sound_process = subprocess.Popen(
-                        ["mpg123", audio_file],
+                        ["mpg123", "-f", str(volume_mpg123), audio_file],
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                     )
                     
@@ -624,9 +645,14 @@ class TTSManager:
                 wait_thread = threading.Thread(target=self.wait_completion, daemon=True)
                 wait_thread.start()
                 
+                if blocking:
+                    wait_thread.join()
+                
                 return True
             except Exception as e:
-                print(f"Ошибка при воспроизведении звука: {e}")
+                error_msg = f"Ошибка при воспроизведении звука: {e}"
+                print(f"[TTS ERROR] {error_msg}")
+                sentry_sdk.capture_exception(e)
                 return False
         except Exception as e:
             error_msg = f"Ошибка при воспроизведении речи: {e}"

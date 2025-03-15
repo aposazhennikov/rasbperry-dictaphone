@@ -63,6 +63,7 @@ class SubMenu(MenuItem):
             self.parent = parent
             self.items = []
             self.current_selection = 0
+            self.on_enter = None  # Добавляем обработчик события входа в меню
         except Exception as e:
             error_msg = f"Ошибка при инициализации SubMenu: {e}"
             print(error_msg)
@@ -82,6 +83,10 @@ class SubMenu(MenuItem):
     def select(self):
         """Вызывается при выборе подменю"""
         try:
+            # Вызываем обработчик события входа в меню, если он установлен
+            if self.on_enter:
+                self.on_enter()
+                
             # При выборе подменю мы просто возвращаем его самого,
             # чтобы менеджер меню мог переключиться на него
             return self
