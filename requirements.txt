@@ -8,3 +8,4 @@ numpy>=1.22.0
 pydub>=0.25.1
 setuptools>=44.0.0
 sentry-sdk>=1.40.1
+python-vlc>=3.0.20000

@@ -2076,16 +2076,36 @@ class MenuManager:
                 return True
             
             # В режиме аудиоплеера обрабатываем кнопки по-особому
-            elif self.player_mode_active:  # Убираем проверку is_playing, чтобы работало и на паузе
+            elif self.player_mode_active:
                 # Обработка кнопок в режиме аудиоплеера
-                if button_id == "KEY_UP":
+                if button_id == "KEY_PAGEUP":
+                    # Уменьшаем громкость
+                    if self.debug:
+                        print("Нажата клавиша PAGE_UP (уменьшение громкости)")
+                    self.playback_manager.adjust_volume(-10)
+                    return True
+                    
+                elif button_id == "KEY_PAGEDOWN":
                     # Увеличиваем громкость
-                    self._adjust_volume(10)
+                    if self.debug:
+                        print("Нажата клавиша PAGE_DOWN (увеличение громкости)")
+                    self.playback_manager.adjust_volume(10)
+                    return True
+                    
+                elif button_id == "KEY_UP":
+                    # Навигация вверх в меню подтверждения
+                    if self.playback_manager.is_delete_confirmation_active():
+                        self.playback_manager.confirm_delete_selected = "Да" if self.playback_manager.confirm_delete_selected == "Нет" else "Нет"
+                        self.tts_manager.play_speech(self.playback_manager.confirm_delete_selected)
+                        return True
                     return True
                     
                 elif button_id == "KEY_DOWN":
-                    # Уменьшаем громкость
-                    self._adjust_volume(-10)
+                    # Навигация вниз в меню подтверждения
+                    if self.playback_manager.is_delete_confirmation_active():
+                        self.playback_manager.confirm_delete_selected = "Да" if self.playback_manager.confirm_delete_selected == "Нет" else "Нет"
+                        self.tts_manager.play_speech(self.playback_manager.confirm_delete_selected)
+                        return True
                     return True
                     
                 elif button_id == "KEY_LEFT":

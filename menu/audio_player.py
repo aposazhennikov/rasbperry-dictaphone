@@ -8,6 +8,7 @@ import numpy as np
 from pathlib import Path
 from pydub import AudioSegment
 import sentry_sdk
+import vlc  # Добавляем импорт VLC
 
 
 class AudioPlayer:
@@ -49,6 +50,17 @@ class AudioPlayer:
         
         # Блокировка для потокобезопасности
         self.lock = threading.Lock()
+        
+        # Инициализация VLC
+        try:
+            self.vlc_instance = vlc.Instance()
+            self.vlc_player = self.vlc_instance.media_player_new()
+            if self.debug:
+                print("VLC инициализирован успешно")
+        except Exception as e:
+            error_msg = f"Ошибка при инициализации VLC: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
         
         if self.debug:
             print("AudioPlayer инициализирован")
@@ -164,46 +176,42 @@ class AudioPlayer:
                 
             if self.debug:
                 print(f"Начинаем воспроизведение файла: {self.file_path}")
-                
-            # Останавливаем существующий процесс, если есть
-            self._stop_process()
             
-            # Запускаем воспроизведение
-            cmd = self._get_playback_command()
-            
-            if not cmd:
-                if self.debug:
-                    print("Не удалось получить команду воспроизведения")
-                return False
-                
-            if self.debug:
-                print(f"Команда воспроизведения: {cmd}")
-                
             try:
-                self.playback_process = subprocess.Popen(
-                    cmd, 
-                    stdout=subprocess.PIPE, 
-                    stderr=subprocess.PIPE
-                )
+                # Создаем медиа и загружаем файл
+                media = self.vlc_instance.media_new(self.file_path)
+                self.vlc_player.set_media(media)
                 
-                # Запускаем поток для фонового воспроизведения
-                self.playback_thread = threading.Thread(target=self._playback_thread)
-                self.playback_thread.daemon = True
-                self.playback_thread.start()
+                # Получаем длительность файла
+                media.parse()
+                self.duration = media.get_duration() / 1000.0  # конвертируем из мс в секунды
                 
-                # Запускаем таймер для отслеживания позиции
-                self._start_timer()
+                # Начинаем воспроизведение
+                self.vlc_player.play()
+                
+                # Устанавливаем текущую громкость
+                self.vlc_player.audio_set_volume(int(self.volume))
                 
                 # Устанавливаем флаги
                 self.is_playing = True
                 self.is_paused = False
                 
+                # Запускаем таймер для отслеживания позиции
+                self._start_timer()
+                
+                if self.debug:
+                    print(f"Воспроизведение начато успешно")
+                    print(f"Длительность файла: {self.duration:.2f} сек")
+                    print(f"Текущая громкость: {self.volume}%")
+                
                 return True
-            except Exception as e:
-                error_msg = f"Ошибка при запуске процесса воспроизведения: {e}"
+                
+            except Exception as vlc_error:
+                error_msg = f"Ошибка при запуске воспроизведения через VLC: {vlc_error}"
                 print(error_msg)
-                sentry_sdk.capture_exception(e)
+                sentry_sdk.capture_exception(vlc_error)
                 return False
+                
         except Exception as e:
             error_msg = f"Критическая ошибка при воспроизведении: {e}"
             print(error_msg)
@@ -322,84 +330,30 @@ class AudioPlayer:
             if self.debug:
                 print("Приостанавливаем воспроизведение")
                 
-            # Запоминаем текущую позицию до установки флагов
-            current_position = self.position
-            
-            # Устанавливаем флаги состояния до остановки процессов
-            self.is_paused = True
-            self.is_playing = False
-            self.stop_playback = True
-                
-            # Останавливаем таймер
-            self._stop_timer()
-            
-            # Используем новый улучшенный метод для остановки всех процессов
-            self._stop_process()
-            
-            # Очищаем потоки воспроизведения
-            if self.playback_thread and self.playback_thread.is_alive():
-                try:
-                    if self.debug:
-                        print("Ожидаем завершения потока воспроизведения для паузы")
-                    # Ограничиваем время ожидания
-                    self.playback_thread.join(timeout=0.3)
-                    if self.playback_thread.is_alive():
-                        if self.debug:
-                            print("Поток воспроизведения не завершился в течение таймаута")
-                except Exception as e:
-                    print(f"Ошибка при ожидании завершения потока для паузы: {e}")
-                    sentry_sdk.capture_exception(e)
-                finally:
-                    # Явно обнуляем ссылку на поток
-                    self.playback_thread = None
-            
-            # Восстанавливаем запомненную позицию, она могла измениться во время остановки
-            self.position = current_position
-            
-            # Дополнительная проверка и очистка аудиопроцессов, если что-то осталось
-            if os.name == 'posix':
-                try:
-                    # Останавливаем все процессы aplay и mpg123 
-                    # Перенаправляем stderr в /dev/null чтобы не видеть ошибки, если процессов нет
-                    os.system("pkill -9 aplay 2>/dev/null")
-                    os.system("pkill -9 mpg123 2>/dev/null")
-                    if self.debug:
-                        print("Выполнена финальная проверка остановки аудиопроцессов")
-                except Exception as e:
-                    if self.debug:
-                        print(f"Ошибка при финальной очистке: {e}")
-            
-            if self.debug:
-                print(f"Воспроизведение успешно приостановлено на позиции {self.position:.2f} сек")
-            
-            # Явно проверяем, что установлен флаг паузы перед возвратом
-            if not self.is_paused:
-                if self.debug:
-                    print("Принудительно устанавливаем флаг is_paused=True")
-                self.is_paused = True
-            
-            return True
-        except Exception as e:
-            print(f"Критическая ошибка при постановке на паузу: {e}")
-            sentry_sdk.capture_exception(e)
-            
-            # В случае ошибки все равно пытаемся остановить воспроизведение
-            # и установить правильные флаги
-            self.is_paused = True
-            self.is_playing = False
-            self.playback_process = None
-            self.playback_thread = None
-            self._stop_timer()
-            
-            # Финальная попытка убить аудиопроцессы
             try:
-                os.system("pkill -9 aplay 2>/dev/null")
-                os.system("pkill -9 mpg123 2>/dev/null")
-            except:
-                pass
+                # Ставим на паузу через VLC
+                self.vlc_player.pause()
+                
+                # Устанавливаем флаги состояния
+                self.is_paused = True
+                
+                # Останавливаем таймер
+                self._stop_timer()
+                
+                return True
+                
+            except Exception as vlc_error:
+                error_msg = f"Ошибка при постановке на паузу через VLC: {vlc_error}"
+                print(error_msg)
+                sentry_sdk.capture_exception(vlc_error)
+                return False
+                
+        except Exception as e:
+            error_msg = f"Критическая ошибка при паузе: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return False
             
-            return True  # Возвращаем True, чтобы интерфейс думал, что пауза успешна
-    
     def resume(self):
         """
         Возобновляет воспроизведение после паузы
@@ -413,71 +367,31 @@ class AudioPlayer:
                     print("Попытка возобновить воспроизведение, но оно не на паузе")
                 return False
             
-            # Сохраняем позицию до возобновления для дебага
-            saved_position = self.position
-                
             if self.debug:
                 print(f"\n*** ВОЗОБНОВЛЕНИЕ ВОСПРОИЗВЕДЕНИЯ В AUDIO_PLAYER ***")
-                print(f"Возобновляем воспроизведение с позиции {saved_position:.2f} сек")
+                print(f"Возобновляем воспроизведение с позиции {self.position:.2f} сек")
                 
-            # Проверяем, что файл существует
-            if not self.file_path or not os.path.exists(self.file_path):
-                error_msg = f"Не удалось возобновить воспроизведение: файл не найден {self.file_path}"
-                print(error_msg)
-                sentry_sdk.capture_message(error_msg, level="error")
-                return False
-                
-            # Защита от некорректной позиции
-            if self.position < 0:
-                self.position = 0
-                if self.debug:
-                    print("Исправлена отрицательная позиция")
-            elif self.position > self.duration and self.duration > 0:
-                self.position = 0
-                if self.debug:
-                    print("Позиция превышает длительность, воспроизведение с начала")
-                
-            # Запускаем воспроизведение с текущей позиции
-            cmd = self._get_playback_command(position=self.position)
-            
-            if self.debug:
-                print(f"Команда возобновления: {cmd}")
-            
             try:
-                # Останавливаем все предыдущие процессы перед запуском нового
-                self._stop_process()
+                # Возобновляем через VLC
+                self.vlc_player.play()
                 
-                # Сбрасываем флаг остановки
-                self.stop_playback = False
-                
-                # Запускаем новый процесс воспроизведения
-                self.playback_process = subprocess.Popen(
-                    cmd, 
-                    stdout=subprocess.PIPE, 
-                    stderr=subprocess.PIPE
-                )
-                
-                # Запускаем поток для фонового воспроизведения
-                self.playback_thread = threading.Thread(target=self._playback_thread)
-                self.playback_thread.daemon = True
-                self.playback_thread.start()
+                # Обновляем флаги
+                self.is_paused = False
                 
                 # Запускаем таймер снова
                 self._start_timer()
                 
-                # Обновляем статус
-                self.is_paused = False
-                self.is_playing = True
-                
                 if self.debug:
-                    print(f"Воспроизведение успешно возобновлено с позиции {saved_position:.2f}")
+                    print(f"Воспроизведение успешно возобновлено")
                 
                 return True
-            except Exception as e:
-                error_msg = f"Ошибка при возобновлении воспроизведения: {e}"
+                
+            except Exception as vlc_error:
+                error_msg = f"Ошибка при возобновлении через VLC: {vlc_error}"
                 print(error_msg)
-                sentry_sdk.capture_exception(e)
+                sentry_sdk.capture_exception(vlc_error)
                 return False
+                
         except Exception as e:
             error_msg = f"Критическая ошибка при возобновлении: {e}"
             print(error_msg)
@@ -500,78 +414,34 @@ class AudioPlayer:
                     print("Воспроизведение уже остановлено")
                 return True
             
-            # Сбрасываем состояние до вызова остановки процессов,
-            # чтобы избежать race condition при запуске новых потоков
-            self.is_playing = False
-            self.is_paused = False
-            self.position = 0
-            self.stop_playback = True
+            try:
+                # Останавливаем воспроизведение через VLC
+                self.vlc_player.stop()
                 
-            if self.debug:
-                print("Останавливаем воспроизведение")
+                # Сбрасываем состояние
+                self.is_playing = False
+                self.is_paused = False
+                self.position = 0
                 
-            # Останавливаем таймер
-            self._stop_timer()
-            
-            # Принудительно останавливаем процесс и все дочерние процессы
-            self._stop_process()
-            
-            # Ждем завершения потока воспроизведения
-            if self.playback_thread and self.playback_thread.is_alive():
-                try:
-                    if self.debug:
-                        print("Ожидаем завершения потока воспроизведения")
-                    # Ограничиваем время ожидания
-                    self.playback_thread.join(timeout=0.3)
-                    if self.playback_thread.is_alive():
-                        if self.debug:
-                            print("Поток не завершился в течение таймаута")
-                except Exception as e:
-                    print(f"Ошибка при ожидании завершения потока: {e}")
-                    sentry_sdk.capture_exception(e)
-                finally:
-                    # Явно устанавливаем None
-                    self.playback_thread = None
-            
-            # Дополнительно проверяем, не остались ли активные процессы
-            # Эта часть будет выполнена, только если _stop_process не справился
-            # с остановкой всех процессов
-            if os.name == 'posix':  # Linux
-                try:
-                    # Останавливаем все процессы aplay и mpg123
-                    os.system("pkill -9 aplay 2>/dev/null")
-                    os.system("pkill -9 mpg123 2>/dev/null")
-                    if self.debug:
-                        print("Выполнена дополнительная очистка аудиопроцессов")
-                except Exception as e:
-                    if self.debug:
-                        print(f"Ошибка при дополнительной очистке: {e}")
-            
-            if self.debug:
-                print("Воспроизведение полностью остановлено")
-            
-            return True
+                # Останавливаем таймер
+                self._stop_timer()
+                
+                if self.debug:
+                    print("Воспроизведение успешно остановлено")
+                
+                return True
+                
+            except Exception as vlc_error:
+                error_msg = f"Ошибка при остановке через VLC: {vlc_error}"
+                print(error_msg)
+                sentry_sdk.capture_exception(vlc_error)
+                return False
+                
         except Exception as e:
-            error_msg = f"Ошибка при остановке воспроизведения: {e}"
+            error_msg = f"Критическая ошибка при остановке: {e}"
             print(error_msg)
             sentry_sdk.capture_exception(e)
-            
-            # В случае ошибки все равно сбрасываем состояние
-            self.is_playing = False
-            self.is_paused = False
-            self.position = 0
-            self.stop_playback = False
-            self.playback_process = None
-            self.playback_thread = None
-            
-            # В любом случае пытаемся убить процессы аудио
-            try:
-                os.system("pkill -9 aplay 2>/dev/null")
-                os.system("pkill -9 mpg123 2>/dev/null")
-            except:
-                pass
-            
-            return True  # Возвращаем True, чтобы система думала, что остановка прошла успешно
+            return False
     
     def _stop_process(self):
         """
@@ -792,7 +662,7 @@ class AudioPlayer:
         Устанавливает громкость воспроизведения
         
         Args:
-            volume (int): Громкость от 0 до 100
+            volume (int): Громкость (может быть больше 100%)
             
         Returns:
             bool: True в случае успеха
@@ -800,30 +670,23 @@ class AudioPlayer:
         try:
             if volume < 0:
                 volume = 0
-            elif volume > 100:
-                volume = 100
                 
             self.volume = volume
             
-            # Для Linux устанавливаем системную громкость с помощью amixer
-            if os.name == 'posix':
-                try:
-                    # Устанавливаем громкость для PCM и Master
-                    volume_cmd = ["amixer", "sset", "PCM", f"{volume}%"]
-                    subprocess.run(volume_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    
-                    # Также устанавливаем для Master
-                    volume_cmd = ["amixer", "sset", "Master", f"{volume}%"]
-                    subprocess.run(volume_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    
-                    if self.debug:
-                        print(f"Громкость установлена на {volume}%")
-                except Exception as cmd_error:
-                    print(f"Ошибка при установке громкости: {cmd_error}")
-                    sentry_sdk.capture_exception(cmd_error)
-                    # Продолжаем выполнение, так как устанавливаем внутреннюю громкость в любом случае
-            
-            return True
+            try:
+                # Устанавливаем громкость через VLC
+                self.vlc_player.audio_set_volume(int(volume))
+                
+                if self.debug:
+                    print(f"Громкость установлена на {volume}%")
+                return True
+                
+            except Exception as vlc_error:
+                error_msg = f"Ошибка при установке громкости через VLC: {vlc_error}"
+                print(error_msg)
+                sentry_sdk.capture_exception(vlc_error)
+                return False
+                
         except Exception as e:
             error_msg = f"Ошибка при установке громкости: {e}"
             print(error_msg)
@@ -1030,9 +893,6 @@ class AudioPlayer:
             if self.debug:
                 print("Запущен поток таймера")
                 
-            # Время последнего обновления
-            last_update = time.time()
-            
             # Интервал обновления в секундах
             update_interval = 0.1
             
@@ -1044,49 +904,52 @@ class AudioPlayer:
                         time.sleep(update_interval)
                         continue
                         
-                    # Вычисляем прошедшее время
-                    current_time = time.time()
-                    elapsed = current_time - last_update
-                    last_update = current_time
-                    
-                    # Учитываем скорость воспроизведения
-                    adjusted_elapsed = elapsed * self.speed
-                    
-                    # Обновляем позицию
-                    self.position += adjusted_elapsed
-                    
+                    # Получаем текущую позицию через VLC (в миллисекундах)
+                    current_pos_ms = self.vlc_player.get_time()
+                    if current_pos_ms >= 0:  # VLC может вернуть -1 если позиция неизвестна
+                        self.position = current_pos_ms / 1000.0  # конвертируем в секунды
+                        
                     # Проверяем, не превышает ли позиция длительность файла
-                    if self.duration > 0 and self.position > self.duration:
+                    if self.duration > 0 and self.position >= self.duration:
                         if self.debug:
                             print(f"Достигнут конец файла: {self.position:.2f} > {self.duration:.2f}")
                         self.position = self.duration
-                    
-                    # Вызываем колбэк для обновления времени в UI
+                        
+                        # Останавливаем воспроизведение
+                        self.stop()
+                        
+                        # Вызываем колбэк завершения, если он установлен
+                        if self.completion_callback:
+                            try:
+                                self.completion_callback(True, "Воспроизведение завершено")
+                            except Exception as callback_error:
+                                print(f"Ошибка в колбэке завершения: {callback_error}")
+                                sentry_sdk.capture_exception(callback_error)
+                        break
+                        
+                    # Вызываем колбэк обновления времени, если он установлен
                     if self.time_callback:
                         try:
                             self.time_callback(self.position)
                         except Exception as callback_error:
                             print(f"Ошибка в колбэке обновления времени: {callback_error}")
                             sentry_sdk.capture_exception(callback_error)
-                            # Отключаем колбэк, чтобы не было постоянных ошибок
-                            self.time_callback = None
-                        
-                    # Ожидаем перед следующим обновлением
+                            
                     time.sleep(update_interval)
                     
                 except Exception as loop_error:
                     print(f"Ошибка в цикле таймера: {loop_error}")
                     sentry_sdk.capture_exception(loop_error)
-                    # Продолжаем выполнение цикла несмотря на ошибку
                     time.sleep(update_interval)
                     
-            if self.debug:
-                print("Поток таймера завершен")
-                
         except Exception as e:
             error_msg = f"Критическая ошибка в потоке таймера: {e}"
             print(error_msg)
             sentry_sdk.capture_exception(e)
+            
+        finally:
+            if self.debug:
+                print("Поток таймера завершен")
     
     def clean_up(self):
         """

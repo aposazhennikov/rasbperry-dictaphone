@@ -724,22 +724,57 @@ class PlaybackManager:
             delta (int): Изменение громкости (-/+)
             
         Returns:
-            int: Новое значение громкости (0-100)
+            int: Новое значение громкости
         """
-        # Получаем текущую громкость
-        current_volume = self.player.volume
-        
-        # Рассчитываем новую громкость
-        new_volume = max(0, min(100, current_volume + delta))
-        
-        # Устанавливаем новую громкость
-        self.player.set_volume(new_volume)
-        
-        # Озвучиваем новую громкость
-        if delta != 0:
-            self.tts_manager.play_speech(f"Громкость {new_volume} процентов")
-        
-        return new_volume
+        try:
+            if self.debug:
+                print(f"\n*** ИЗМЕНЕНИЕ ГРОМКОСТИ ***")
+                print(f"Текущая громкость: {self.player.volume}")
+                print(f"Изменение: {delta}")
+            
+            # Получаем текущую громкость
+            current_volume = self.player.volume
+            
+            # Рассчитываем новую громкость (без ограничения в 100%)
+            # Ограничиваем только снизу, чтобы не уходить в отрицательные значения
+            new_volume = max(0, current_volume + delta)
+            
+            if self.debug:
+                print(f"Новая громкость: {new_volume}")
+            
+            # Устанавливаем новую громкость
+            try:
+                self.player.set_volume(new_volume)
+                
+                # Озвучиваем новую громкость только при существенном изменении
+                if abs(delta) >= 5:  # Озвучиваем только при изменении на 5% или больше
+                    self.tts_manager.play_speech(f"Громкость {new_volume} процентов")
+                
+                # Добавляем информацию в Sentry
+                sentry_sdk.add_breadcrumb(
+                    category='volume',
+                    message=f'Изменение громкости: {current_volume} -> {new_volume}',
+                    level='info',
+                    data={
+                        'delta': delta,
+                        'current_volume': current_volume,
+                        'new_volume': new_volume
+                    }
+                )
+                
+                return new_volume
+                
+            except Exception as vol_error:
+                error_msg = f"Ошибка при установке громкости {new_volume}: {str(vol_error)}"
+                print(f"ОШИБКА: {error_msg}")
+                sentry_sdk.capture_exception(vol_error)
+                return current_volume
+                
+        except Exception as e:
+            error_msg = f"Ошибка при изменении громкости: {str(e)}"
+            print(f"ОШИБКА: {error_msg}")
+            sentry_sdk.capture_exception(e)
+            return self.player.volume
     
     def toggle_fast_playback(self, enable):
         """
@@ -784,12 +819,12 @@ class PlaybackManager:
             # Определение всех используемых кодов клавиш
             KEY_SELECT = 353  # Пауза/воспроизведение/подтверждение
             KEY_BACK = 158    # Выход из режима воспроизведения
-            KEY_UP = 103      # Увеличение громкости/навигация вверх
-            KEY_DOWN = 108    # Уменьшение громкости/навигация вниз
+            KEY_UP = 103      # Навигация вверх
+            KEY_DOWN = 108    # Навигация вниз
             KEY_RIGHT = 106   # Перемотка вперед / ускоренное воспроизведение
             KEY_LEFT = 105    # Перемотка назад
-            KEY_PAGEUP = 104  # Предыдущий файл
-            KEY_PAGEDOWN = 109 # Следующий файл
+            KEY_PAGEUP = 104  # Уменьшение громкости
+            KEY_PAGEDOWN = 109 # Увеличение громкости
             KEY_POWER = 116   # Удаление файла
             
             if self.debug:
@@ -843,30 +878,17 @@ class PlaybackManager:
                     self.stop_playback()
                     return True
                 
-                # Переключение между файлами
-                elif key_code == KEY_PAGEDOWN:
+                # Управление громкостью через PAGE_UP/PAGE_DOWN
+                elif key_code == KEY_PAGEUP:  # Уменьшение громкости
                     if self.debug:
-                        print("Нажата клавиша NEXT")
-                    self.move_to_next_file()
-                    return True
-                
-                elif key_code == KEY_PAGEUP:
-                    if self.debug:
-                        print("Нажата клавиша PREV")
-                    self.move_to_prev_file()
-                    return True
-                
-                # Управление громкостью
-                elif key_code == KEY_UP:
-                    if self.debug:
-                        print("Нажата клавиша VOL+")
-                    self.adjust_volume(10)  # Увеличиваем на 10%
-                    return True
-                
-                elif key_code == KEY_DOWN:
-                    if self.debug:
-                        print("Нажата клавиша VOL-")
+                        print("Нажата клавиша PAGE_UP (уменьшение громкости)")
                     self.adjust_volume(-10)  # Уменьшаем на 10%
+                    return True
+                    
+                elif key_code == KEY_PAGEDOWN:  # Увеличение громкости
+                    if self.debug:
+                        print("Нажата клавиша PAGE_DOWN (увеличение громкости)")
+                    self.adjust_volume(10)  # Увеличиваем на 10%
                     return True
                 
                 # Удаление файла
@@ -880,27 +902,21 @@ class PlaybackManager:
             if key_code == KEY_RIGHT:
                 if pressed != self.key_states["right_pressed"]:
                     self.key_states["right_pressed"] = pressed
-                    
-                    # Включаем/выключаем ускоренное воспроизведение
                     self.toggle_fast_playback(pressed)
-                    
                     return True
                     
             elif key_code == KEY_LEFT:
                 if pressed != self.key_states["left_pressed"]:
                     self.key_states["left_pressed"] = pressed
-                    
-                    # Реализация перемотки назад может быть добавлена здесь
-                    # В текущей версии мы просто будем перематывать назад на 10 секунд
                     if pressed:
                         self.rewind(10)
-                        
                     return True
             
             return False
+            
         except Exception as e:
-            error_msg = f"Ошибка при обработке нажатия клавиши в режиме воспроизведения: {e}"
-            print(error_msg)
+            error_msg = f"Ошибка при обработке нажатия клавиши: {str(e)}"
+            print(f"КРИТИЧЕСКАЯ ОШИБКА: {error_msg}")
             sentry_sdk.capture_exception(e)
             return False
     
