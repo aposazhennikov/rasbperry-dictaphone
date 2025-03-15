@@ -742,7 +742,6 @@ class MenuManager:
         
         # Добавляем подменю для диктофона
         dictaphone_menu.add_item(MenuItem("Создать новую запись", lambda: self._show_folder_selection_menu()))
-        dictaphone_menu.add_item(MenuItem("Календарь", lambda: self._show_calendar_menu()))
         dictaphone_menu.add_item(MenuItem("Воспроизвести запись", lambda: self._show_play_record_menu()))
         dictaphone_menu.add_item(MenuItem("Удалить запись", lambda: self._show_delete_record_menu()))
         
