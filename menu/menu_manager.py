@@ -1656,9 +1656,9 @@ class MenuManager:
     
     def _delete_current_file(self):
         """Удаляет текущий воспроизводимый файл"""
-        if not self.playback_state["active"]:
+        if not self.player_mode_active:  # Проверяем только режим плеера, а не активность воспроизведения
             if self.debug:
-                print("Попытка удалить файл, но воспроизведение не активно")
+                print("Попытка удалить файл, но режим плеера не активен")
             return
         
         # Инициируем процесс удаления
@@ -1672,15 +1672,38 @@ class MenuManager:
             confirmed (bool): True для подтверждения, False для отмены
         """
         try:
-            if not self.playback_manager.is_delete_confirmation_active():
-                return
+            # Добавляем хлебные крошки для отслеживания в Sentry
+            sentry_sdk.add_breadcrumb(
+                category='delete',
+                message=f'Начало процесса подтверждения удаления (confirmed={confirmed})',
+                level='info'
+            )
             
             if self.debug:
                 print(f"\n*** ПОДТВЕРЖДЕНИЕ/ОТМЕНА УДАЛЕНИЯ: {confirmed} ***")
                 print(f"Состояние до: player_mode={self.player_mode_active}, playback_active={self.playback_state['active']}")
             
+            # Проверяем, активен ли режим подтверждения удаления
+            if not self.playback_manager.is_delete_confirmation_active():
+                error_msg = "Попытка подтвердить/отменить удаление, когда режим подтверждения не активен"
+                if self.debug:
+                    print(f"ОШИБКА: {error_msg}")
+                sentry_sdk.capture_message(error_msg, level='warning')
+                return
+            
             # Подтверждаем или отменяем удаление
-            result = self.playback_manager.confirm_delete(confirmed)
+            try:
+                result = self.playback_manager.confirm_delete(confirmed)
+                sentry_sdk.add_breadcrumb(
+                    category='delete',
+                    message=f'Результат confirm_delete: {result}',
+                    level='info'
+                )
+            except Exception as delete_error:
+                error_msg = f"Ошибка при подтверждении/отмене удаления в playback_manager: {str(delete_error)}"
+                print(f"ОШИБКА: {error_msg}")
+                sentry_sdk.capture_exception(delete_error)
+                raise  # Пробрасываем исключение дальше для общей обработки
             
             # Если отменили удаление - гарантируем, что мы остаемся в режиме воспроизведения
             if not confirmed:
@@ -1694,11 +1717,42 @@ class MenuManager:
                 if self.debug:
                     print(f"Отмена удаления: принудительно устанавливаем режим воспроизведения")
                     print(f"Состояние после: player_mode={self.player_mode_active}, playback_active={self.playback_state['active']}")
+                
+                sentry_sdk.add_breadcrumb(
+                    category='delete',
+                    message='Отмена удаления: восстановление режима воспроизведения',
+                    level='info',
+                    data={
+                        'player_mode_active': self.player_mode_active,
+                        'playback_active': self.playback_state['active'],
+                        'playback_paused': self.playback_state['paused']
+                    }
+                )
         
         except Exception as e:
-            error_msg = f"Ошибка при подтверждении/отмене удаления: {e}"
-            print(error_msg)
-            sentry_sdk.capture_exception(e)
+            error_msg = f"Критическая ошибка при подтверждении/отмене удаления: {str(e)}"
+            print(f"КРИТИЧЕСКАЯ ОШИБКА: {error_msg}")
+            
+            # Отправляем ошибку в Sentry с дополнительным контекстом
+            with sentry_sdk.push_scope() as scope:
+                scope.set_extra('confirmed', confirmed)
+                scope.set_extra('player_mode_active', self.player_mode_active)
+                scope.set_extra('playback_state', self.playback_state)
+                sentry_sdk.capture_exception(e)
+            
+            # В случае ошибки, если это была отмена удаления,
+            # все равно пытаемся восстановить режим воспроизведения
+            if not confirmed:
+                try:
+                    self.player_mode_active = True
+                    self.playback_state["active"] = True
+                    self.playback_state["paused"] = False
+                    sentry_sdk.capture_message(
+                        "Аварийное восстановление режима воспроизведения после ошибки",
+                        level='warning'
+                    )
+                except Exception as recovery_error:
+                    sentry_sdk.capture_exception(recovery_error)
     
     def _next_file(self):
         """Переходит к следующему файлу в списке"""
@@ -1950,7 +2004,7 @@ class MenuManager:
                 return True
             
             # В режиме аудиоплеера обрабатываем кнопки по-особому
-            elif is_player_mode and is_playing:
+            elif self.player_mode_active:  # Убираем проверку is_playing, чтобы работало и на паузе
                 # Обработка кнопок в режиме аудиоплеера
                 if button_id == "KEY_UP":
                     # Увеличиваем громкость
