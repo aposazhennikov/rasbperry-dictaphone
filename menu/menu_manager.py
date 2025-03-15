@@ -822,14 +822,20 @@ class MenuManager:
                 voice_desc, 
                 create_voice_action()
             ))
+
+        # - Подменю управления громкостью системных сообщений
+        volume_menu = SubMenu("Громкость системных сообщений", parent=settings_menu)
+        settings_menu.add_item(volume_menu)
         
-        # Добавляем подменю для подтверждения удаления
-        confirm_delete_menu = SubMenu("Подтверждение удаления", parent=settings_menu)
-        settings_menu.add_item(confirm_delete_menu)
-        
-        # -- Варианты подтверждения
-        confirm_delete_menu.add_item(MenuItem("Да", lambda: "Удаление подтверждено"))
-        confirm_delete_menu.add_item(MenuItem("Нет", lambda: "Удаление отменено"))
+        # -- Добавляем пункты управления громкостью (от 10% до 100% с шагом 10%)
+        for volume in range(10, 101, 10):
+            def create_volume_action(vol=volume):
+                return lambda: self.change_system_volume(vol)
+                
+            volume_menu.add_item(MenuItem(
+                f"{volume}% громкости", 
+                create_volume_action()
+            ))
         
         # Устанавливаем главное меню как корневое
         self.set_root_menu(main_menu)
