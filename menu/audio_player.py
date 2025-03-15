@@ -838,7 +838,7 @@ class AudioPlayer:
                 print("Запуск таймера обновления позиции")
                 
             # Устанавливаем флаг для работы таймера
-            self.stop_timer = False
+            self.timer_active = True
             
             # Запускаем поток таймера
             self.timer_thread = threading.Thread(target=self._timer_thread, daemon=True)
@@ -852,15 +852,14 @@ class AudioPlayer:
             self.timer_thread = None
     
     def _stop_timer(self):
-        """
-        Останавливает таймер обновления позиции
-        """
+        """Останавливает таймер обновления позиции"""
         try:
             # Устанавливаем флаг остановки
-            self.stop_timer = True
+            self.timer_active = False
             
-            # Ждем завершения потока, если он активен
-            if self.timer_thread and self.timer_thread.is_alive():
+            # Ждем завершения потока, если он активен и не является текущим потоком
+            if (self.timer_thread and self.timer_thread.is_alive() and 
+                self.timer_thread != threading.current_thread()):
                 if self.debug:
                     print("Ожидаем завершения таймера...")
                 try:
@@ -870,20 +869,12 @@ class AudioPlayer:
                             print("Не удалось дождаться завершения таймера")
                 except Exception as thread_error:
                     print(f"Ошибка при ожидании завершения таймера: {thread_error}")
-                    sentry_sdk.capture_exception(thread_error)
                     
-            # Очищаем ссылку на поток в любом случае
             self.timer_thread = None
             
-            if self.debug:
-                print("Таймер остановлен")
         except Exception as e:
-            error_msg = f"Ошибка при остановке таймера: {e}"
-            print(error_msg)
+            print(f"Ошибка при остановке таймера: {e}")
             sentry_sdk.capture_exception(e)
-            
-            # В случае ошибки все равно очищаем ссылку
-            self.timer_thread = None
     
     def _timer_thread(self):
         """
@@ -897,7 +888,7 @@ class AudioPlayer:
             update_interval = 0.1
             
             # Пока флаг остановки не установлен
-            while not self.stop_timer:
+            while self.timer_active:
                 try:
                     # Если воспроизведение не запущено или на паузе, ждем
                     if not self.is_playing or self.is_paused:

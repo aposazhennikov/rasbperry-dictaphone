@@ -729,8 +729,8 @@ class PlaybackManager:
         try:
             if self.debug:
                 print(f"\n*** ИЗМЕНЕНИЕ ГРОМКОСТИ ***")
-                print(f"Текущая громкость: {self.player.volume}")
-                print(f"Изменение: {delta}")
+                print(f"Текущая громкость: {self.player.volume}%")
+                print(f"Изменение: {'+' if delta > 0 else ''}{delta}%")
             
             # Получаем текущую громкость
             current_volume = self.player.volume
@@ -740,20 +740,34 @@ class PlaybackManager:
             new_volume = max(0, current_volume + delta)
             
             if self.debug:
-                print(f"Новая громкость: {new_volume}")
+                print(f"Новая громкость: {new_volume}%")
+                if new_volume == 0:
+                    print("ВНИМАНИЕ: Достигнут минимальный уровень громкости (0%)")
+                elif new_volume > 100:
+                    print(f"ВНИМАНИЕ: Громкость превышает 100% ({new_volume}%)")
             
             # Устанавливаем новую громкость
             try:
                 self.player.set_volume(new_volume)
                 
-                # Озвучиваем новую громкость только при существенном изменении
-                if abs(delta) >= 5:  # Озвучиваем только при изменении на 5% или больше
-                    self.tts_manager.play_speech(f"Громкость {new_volume} процентов")
+                # Воспроизводим системный звук изменения громкости
+                try:
+                    import subprocess
+                    subprocess.run(["paplay", "/home/aleks/main-sounds/pup.wav"], 
+                                 stdout=subprocess.PIPE, 
+                                 stderr=subprocess.PIPE)
+                except Exception as sound_error:
+                    if self.debug:
+                        print(f"Ошибка при воспроизведении звука: {sound_error}")
+                    # Не прерываем выполнение, если не удалось воспроизвести звук
+                
+                if self.debug:
+                    print(f"Громкость успешно изменена: {current_volume}% -> {new_volume}%")
                 
                 # Добавляем информацию в Sentry
                 sentry_sdk.add_breadcrumb(
                     category='volume',
-                    message=f'Изменение громкости: {current_volume} -> {new_volume}',
+                    message=f'Изменение громкости: {current_volume}% -> {new_volume}%',
                     level='info',
                     data={
                         'delta': delta,
@@ -765,7 +779,7 @@ class PlaybackManager:
                 return new_volume
                 
             except Exception as vol_error:
-                error_msg = f"Ошибка при установке громкости {new_volume}: {str(vol_error)}"
+                error_msg = f"Ошибка при установке громкости {new_volume}%: {str(vol_error)}"
                 print(f"ОШИБКА: {error_msg}")
                 sentry_sdk.capture_exception(vol_error)
                 return current_volume
