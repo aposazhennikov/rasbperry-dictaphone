@@ -10,6 +10,7 @@ from .playback_manager import PlaybackManager
 from .settings_manager import SettingsManager
 from .audio_recorder import AudioRecorder
 from .menu_item import MenuItem, SubMenu, Menu
+from .external_storage_menu import ExternalStorageMenu
 
 class MenuManager:
     """Класс для управления иерархическим меню"""
@@ -796,6 +797,10 @@ class MenuManager:
             station_menu.add_item(MenuItem("Начать текущую композицию с начала", lambda s=station: f"Перезапуск композиции на {s}"))
             station_menu.add_item(MenuItem("Переключить на предыдущую композицию", lambda s=station: f"Предыдущая композиция на {s}"))
             station_menu.add_item(MenuItem("Переключить на следующую композицию", lambda s=station: f"Следующая композиция на {s}"))
+        
+        # Добавляем подменю для внешних носителей
+        external_storage = ExternalStorageMenu()
+        main_menu.add_item(MenuItem("Внешний носитель", lambda: external_storage))
         
         # Добавляем подменю для настроек
         settings_menu = SubMenu("Настройки", parent=main_menu)

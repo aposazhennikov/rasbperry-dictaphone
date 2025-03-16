@@ -11,3 +11,10 @@ from .google_tts_manager import GoogleTTSManager
 from .audio_recorder import AudioRecorder
 from .recorder_manager import RecorderManager
 from .playback_manager import PlaybackManager
+
+"""
+Пакет menu содержит классы для работы с иерархическим меню.
+"""
+
+from .base_menu import BaseMenu
+from .external_storage_menu import ExternalStorageMenu
