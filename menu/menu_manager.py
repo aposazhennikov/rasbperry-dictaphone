@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 import os
+import sys
 import time
+import importlib
 import sentry_sdk
+import logging
 from pathlib import Path
 from .tts_manager import TTSManager
 from .display_manager import DisplayManager
@@ -11,6 +14,10 @@ from .settings_manager import SettingsManager
 from .audio_recorder import AudioRecorder
 from .menu_item import MenuItem, SubMenu, Menu
 from .external_storage_menu import ExternalStorageMenu
+from .base_menu import BaseMenu
+
+# Настройка логирования
+logger = logging.getLogger("menu_manager")
 
 class MenuManager:
     """Класс для управления иерархическим меню"""
@@ -110,65 +117,43 @@ class MenuManager:
         self.current_menu = menu
     
     def display_current_menu(self):
-        """
-        Отображает текущее меню и озвучивает его название
-        """
+        """Отображает текущее меню"""
         try:
             if not self.current_menu:
                 if self.debug:
                     print("Ошибка: нет текущего меню для отображения")
                 return
                 
+            # Безопасно получаем имя меню
+            menu_name = getattr(self.current_menu, 'name', str(self.current_menu))
+            
             if self.debug:
-                print(f"\n--- ОТОБРАЖЕНИЕ МЕНЮ: {self.current_menu.name} ---")
+                print(f"\n--- ОТОБРАЖЕНИЕ МЕНЮ: {menu_name} ---")
                 print(f"Текущее меню содержит {len(self.current_menu.items)} пунктов")
                 
             # Отображаем меню на экране, если есть дисплей
             if self.display_manager:
                 try:
                     self.display_manager.display_menu(self.current_menu)
-                except Exception as display_error:
-                    print(f"Ошибка при отображении меню на дисплее: {display_error}")
-                    sentry_sdk.capture_exception(display_error)
+                except Exception as e:
+                    error_msg = f"Ошибка при отображении меню: {e}"
+                    print(error_msg)
+                    sentry_sdk.capture_exception(e)
             
-            # Озвучиваем название меню, если включен TTS
+            # Озвучиваем текущий пункт меню, если включена озвучка
             if self.tts_enabled:
-                try:
-                    voice = self._get_voice_id_for_menu_item(self.current_menu.name)
-                    if self.debug:
-                        print(f"Озвучиваем название меню: {self.current_menu.name}, голос: {voice}")
-                    self.tts_manager.play_speech(f"Меню {self.current_menu.name}", voice_id=voice)
-                except Exception as tts_error:
-                    print(f"Ошибка при озвучивании названия меню: {tts_error}")
-                    sentry_sdk.capture_exception(tts_error)
-            
-            # Озвучиваем текущий выбранный пункт, если есть
-            if self.current_menu.items and len(self.current_menu.items) > 0:
-                try:
-                    current_index = self.current_menu.current_selection
-                    if current_index >= 0 and current_index < len(self.current_menu.items):
-                        current_item = self.current_menu.items[current_index]
-                        if self.tts_enabled:
-                            try:
-                                # Пытаемся получить специальный голос для пункта меню
-                                voice_id = self._get_voice_id_for_menu_item(current_item.name)
-                                if self.debug:
-                                    print(f"Озвучиваем текущий пункт: {current_item.name}, голос: {voice_id}")
-                                    
-                                self.tts_manager.play_speech(current_item.get_speech_text(), voice_id=voice_id)
-                            except Exception as item_tts_error:
-                                print(f"Ошибка при озвучивании пункта меню: {item_tts_error}")
-                                sentry_sdk.capture_exception(item_tts_error)
-                                # Пробуем запасной вариант с обычным голосом
-                                try:
-                                    voice = self.tts_manager.voice
-                                    self.tts_manager.play_speech(current_item.get_speech_text(), voice_id=voice)
-                                except:
-                                    # Если и это не сработало, пропускаем
-                                    pass
-                except Exception as item_error:
-                    print(f"Ошибка при работе с текущим пунктом меню: {item_error}")
-                    sentry_sdk.capture_exception(item_error)
+                current_item = self.current_menu.get_current_item()
+                if current_item:
+                    try:
+                        # Получаем текущий голос из настроек
+                        voice = self.settings_manager.get_voice()
+                        item_tts_text = current_item.get_tts_text()
+                        print(f"Озвучиваем новый пункт: {item_tts_text}, голос: {voice}")
+                        self.tts_manager.play_speech(item_tts_text, voice_id=voice)
+                    except Exception as e:
+                        error_msg = f"Ошибка при озвучке пункта меню: {e}"
+                        print(error_msg)
+                        sentry_sdk.capture_exception(e)
         except Exception as e:
             error_msg = f"Критическая ошибка при отображении меню: {e}"
             print(error_msg)
@@ -339,9 +324,14 @@ class MenuManager:
         # Вызываем метод select у выбранного пункта
         result = item.select()
         
-        # Если результат - подменю, переключаемся на него
-        if isinstance(result, SubMenu):
+        # Если результат - подменю или наследник BaseMenu, переключаемся на него
+        if isinstance(result, SubMenu) or isinstance(result, BaseMenu):
             self.current_menu = result
+            
+            # Вызываем метод on_enter для нового меню, если он существует
+            if hasattr(self.current_menu, 'on_enter') and callable(self.current_menu.on_enter):
+                self.current_menu.on_enter()
+                
             self.display_current_menu()
         elif result is not None:
             # Если результат не None и не подменю, 
@@ -354,76 +344,99 @@ class MenuManager:
                 self.tts_manager.play_speech(str(result), voice_id=voice)
                 
             self.display_current_menu()
+        # Если возвращен None, и это пункт "Назад", возвращаемся в родительское меню
+        elif result is None and hasattr(item, 'name') and item.name.lower() in ["назад", "back"]:
+            if self.current_menu and self.current_menu.parent:
+                self.current_menu = self.current_menu.parent
+                
+                # Вызываем метод on_enter для родительского меню, если он существует
+                if hasattr(self.current_menu, 'on_enter') and callable(self.current_menu.on_enter):
+                    self.current_menu.on_enter()
+                    
+                self.display_current_menu()
     
-    def go_back(self):
-        """Возвращается в родительское меню"""
-        # Сохраняем текущее меню перед переходом
-        previous_menu = self.current_menu
-        
-        if self.current_menu and self.current_menu.parent:
-            # Формируем сообщение заранее
-            message = f"Возврат в {self.current_menu.parent.name}"
-            print(f"Подготовка к возврату в родительское меню: {message}")
-            
-            # Сначала озвучиваем сообщение в блокирующем режиме 
-            if self.tts_enabled:
-                # Получаем текущий голос из настроек
-                voice = self.settings_manager.get_voice()
+    def go_back(self) -> None:
+        """
+        Возврат к предыдущему меню.
+        """
+        try:
+            # Проверяем, есть ли у текущего меню родительское меню
+            if hasattr(self.current_menu, 'parent') and self.current_menu.parent:
+                # Если есть родительское меню, переходим к нему
+                parent = self.current_menu.parent
+                logger.info(f"Возврат в родительское меню: {getattr(parent, 'name', str(parent))}")
                 
-                # Используем блокирующее озвучивание
-                try:
-                    print(f"Озвучивание сообщения перед возвратом: {message}")
-                    if hasattr(self.tts_manager, 'play_speech_blocking'):
-                        self.tts_manager.play_speech_blocking(message, voice_id=voice)
-                    else:
-                        self.tts_manager.play_speech(message, voice_id=voice)
-                        # Если блокирующий метод недоступен, добавляем паузу
-                        time.sleep(1.5)
-                except Exception as e:
-                    print(f"Ошибка при озвучивании перед переходом: {e}")
-                    # Небольшая пауза для стабильности
-                    time.sleep(0.5)
-            
-            # Теперь выполняем переход между меню
-            self.current_menu = self.current_menu.parent
-            print(f"Переход в родительское меню: {self.current_menu.name}")
-            
-            # Отображаем меню после перехода
-            self.display_current_menu()
+                # Переходим к родительскому меню
+                self.current_menu = parent
                 
-        elif self.current_menu != self.root_menu:
-            # Если нет родительского меню, но текущее меню не корневое,
-            # возвращаемся в корневое меню
-            
-            # Формируем сообщение
-            message = "Возврат в главное меню"
-            print(f"Подготовка к возврату в главное меню")
-            
-            # Сначала озвучиваем сообщение в блокирующем режиме
-            if self.tts_enabled:
-                # Получаем текущий голос из настроек
-                voice = self.settings_manager.get_voice()
+                # Если родительское меню имеет метод on_enter, вызываем его
+                if hasattr(parent, 'on_enter') and callable(parent.on_enter):
+                    parent.on_enter()
                 
-                # Используем блокирующее озвучивание
-                try:
-                    print(f"Озвучивание сообщения перед возвратом: {message}")
-                    if hasattr(self.tts_manager, 'play_speech_blocking'):
-                        self.tts_manager.play_speech_blocking(message, voice_id=voice)
-                    else:
-                        self.tts_manager.play_speech(message, voice_id=voice)
-                        # Если блокирующий метод недоступен, добавляем паузу
-                        time.sleep(1.5)
-                except Exception as e:
-                    print(f"Ошибка при озвучивании перед переходом: {e}")
-                    # Небольшая пауза для стабильности
-                    time.sleep(0.5)
+                # Отображаем родительское меню
+                self.display_current_menu()
+            else:
+                # Если нет родительского меню, переходим в главное меню
+                logger.info("Возврат в главное меню (родительское меню не найдено)")
+                self.set_main_menu()
+                
+                # Обновляем сообщение перед возвратом в главное меню
+                self.tts_manager.play_speech(
+                    "Возврат в главное меню", 
+                    voice_id=self.settings_manager.get_voice()
+                )
+        except Exception as e:
+            logger.error(f"Ошибка при возврате к предыдущему меню: {e}")
+            sentry_sdk.capture_exception(e)
+            # В случае ошибки возвращаемся в главное меню
+            self.set_main_menu()
+    
+    def handle_key_back(self) -> None:
+        """
+        Обработка нажатия кнопки "Назад".
+        """
+        try:
+            logger.info("Обработка нажатия кнопки: KEY_BACK")
             
-            # Теперь выполняем переход
-            self.current_menu = self.root_menu
-            print(f"Переход в главное меню")
-            
-            # Отображаем меню после перехода
-            self.display_current_menu()
+            # Проверяем текущий режим
+            if self.current_mode == self.MODE_MENU:
+                logger.info("Текущий режим: МЕНЮ")
+                
+                # Проверяем активна ли запись и воспроизведение
+                is_recording = self.recorder.is_recording() if hasattr(self, 'recorder') else False
+                is_playing = self.player.is_playing() if hasattr(self, 'player') else False
+                logger.info(f"Запись активна: {is_recording}, Воспроизведение активно: {is_playing}")
+                
+                # Если запись активна, останавливаем её
+                if is_recording:
+                    self.recorder.stop_recording()
+                    return
+                
+                # Если воспроизведение активно, останавливаем его
+                if is_playing:
+                    self.player.stop()
+                    return
+                
+                # Возвращаемся в предыдущее меню
+                if hasattr(self.current_menu, 'parent') and self.current_menu.parent:
+                    logger.info("Подготовка к возврату в родительское меню")
+                    parent_name = getattr(self.current_menu.parent, 'name', "предыдущее меню")
+                    self.tts_manager.play_speech(f"Возврат в {parent_name}", voice_id=self.settings_manager.get_voice())
+                else:
+                    logger.info("Подготовка к возврату в главное меню")
+                    self.tts_manager.play_speech("Возврат в главное меню", voice_id=self.settings_manager.get_voice())
+                    
+                # Выполняем возврат
+                self.go_back()
+            else:
+                logger.info(f"Текущий режим: {self.current_mode}")
+                # Другие режимы обрабатываются в соответствующих классах
+                
+        except Exception as e:
+            logger.error(f"Ошибка при обработке кнопки KEY_BACK: {e}")
+            sentry_sdk.capture_exception(e)
+            # В случае ошибки возвращаемся в главное меню
+            self.set_main_menu()
     
     def pre_generate_all_speech(self, voices=None):
         """
@@ -799,7 +812,11 @@ class MenuManager:
             station_menu.add_item(MenuItem("Переключить на следующую композицию", lambda s=station: f"Следующая композиция на {s}"))
         
         # Добавляем подменю для внешних носителей
-        external_storage = ExternalStorageMenu()
+        external_storage = ExternalStorageMenu(
+            settings_manager=self.settings_manager, 
+            debug=self.debug, 
+            menu_manager=self
+        )
         main_menu.add_item(MenuItem("Внешний носитель", lambda: external_storage))
         
         # Добавляем подменю для настроек
@@ -1237,12 +1254,13 @@ class MenuManager:
             print(error_msg)
             sentry_sdk.capture_exception(e)
     
-    def _show_play_files_menu(self, folder):
+    def _show_play_files_menu(self, folder, start_with_file=None):
         """
         Показывает меню со списком файлов для воспроизведения
         
         Args:
-            folder (str): Папка для поиска файлов (A, B или C)
+            folder (str): Папка для поиска файлов
+            start_with_file (int, optional): Индекс файла для немедленного воспроизведения
         """
         try:
             print(f"\n*** ЗАГРУЗКА ФАЙЛОВ ИЗ ПАПКИ {folder} ***")
@@ -1256,7 +1274,7 @@ class MenuManager:
                 files_count = self.playback_manager.get_files_count()
                 
                 # Создаем подменю для файлов
-                files_menu = SubMenu(f"Записи в папке {folder}")
+                files_menu = SubMenu(f"Записи в папке {os.path.basename(folder)}")
                 
                 # Добавляем файлы в меню
                 for i in range(files_count):
@@ -1271,13 +1289,22 @@ class MenuManager:
                 
                 print(f"Загружено {files_count} файлов из папки {folder}")
                 
+                # Если указан индекс файла для воспроизведения, запускаем его сразу
+                if start_with_file is not None and 0 <= start_with_file < files_count:
+                    # Устанавливаем текущий выбранный пункт меню
+                    self.current_menu.current_selection = start_with_file
+                    # Запускаем воспроизведение
+                    self._play_file(start_with_file)
+                    return True
+                
                 # Отображаем меню файлов
                 self.display_current_menu()
+                return True
             else:
                 print(f"В папке {folder} нет файлов")
                 
                 # Создаем сообщение
-                message = f"В папке {folder} нет записей"
+                message = f"В папке {os.path.basename(folder)} нет записей"
                 
                 # Отображаем и озвучиваем сообщение
                 self.display_manager.display_message(message, title="Пустая папка")
@@ -1290,13 +1317,12 @@ class MenuManager:
                 # Возвращаемся в предыдущее меню
                 time.sleep(2)
                 self.display_current_menu()
+                return False
         except Exception as e:
             error_msg = f"Ошибка при показе меню файлов: {e}"
             print(error_msg)
             sentry_sdk.capture_exception(e)
-            
-            # В случае ошибки возвращаемся к текущему меню
-            self.display_current_menu()
+            return False
     
     def _play_file(self, file_index):
         """Начинает воспроизведение выбранного файла"""
@@ -2339,3 +2365,32 @@ class MenuManager:
                 print(f"Ошибка при очистке экрана: {e}")
             # Если не удалось очистить экран, печатаем пустые строки
             print("\n" * 100)
+
+    def process_key_event(self, key_code, key_value):
+        """
+        Обработка события клавиатуры
+        
+        Args:
+            key_code (int): Код клавиши
+            key_value (int): Значение (0 - отпущена, 1 - нажата, 2 - удерживается)
+            
+        Returns:
+            bool: True если событие обработано
+        """
+        try:
+            # Пропускаем события отпускания клавиш и повторы
+            if key_value == 0:
+                # Для клавиши SELECT мы обрабатываем событие отпускания
+                if key_code != self.KEY_SELECT:
+                    return False
+            
+            # ... остальной код метода ...
+            
+        except Exception as e:
+            error_msg = f"Ошибка при обработке события клавиши: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return False
+            
+    # Удаляем дублирующий метод select() из этого места файла
+    # Метод process_key_event будет использовать select_current_item() вместо него

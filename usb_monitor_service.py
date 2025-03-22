@@ -141,9 +141,22 @@ class USBMonitorService:
             is_mounted, mount_point = self._is_device_mounted(device_path)
             if is_mounted:
                 logger.info(f"Устройство {device_path} уже примонтировано в {mount_point}")
+                # Если устройство монтировано, но владелец - root, меняем владельца на текущего пользователя
+                if os.path.exists(mount_point):
+                    stats = os.stat(mount_point)
+                    if stats.st_uid == 0:  # Если владелец - root (uid=0)
+                        try:
+                            # Пытаемся изменить владельца на текущего пользователя
+                            uid = os.getuid()
+                            gid = os.getgid()
+                            logger.info(f"Меняем владельца {mount_point} с root на текущего пользователя (uid={uid}, gid={gid})")
+                            # Используем subprocess вместо os.chown, так как нужны права sudo
+                            self._run_command(f"sudo chown -R {uid}:{gid} {mount_point}", shell=True)
+                        except Exception as e:
+                            logger.warning(f"Не удалось изменить владельца {mount_point}: {e}")
                 return mount_point
             
-            # Если нет, сначала пробуем через udisksctl
+            # Если нет, сначала пробуем через udisksctl (он должен монтировать с правами текущего пользователя)
             stdout, stderr, rc = self._run_command(f"udisksctl mount -b {device_path}")
             
             if rc == 0 and "at " in stdout:
@@ -153,7 +166,7 @@ class USBMonitorService:
             else:
                 logger.warning(f"Не удалось примонтировать через udisks2: {stderr}")
                 
-                # Пробуем получить информацию о файловой системе
+                # Получаем информацию о файловой системе
                 fs_stdout, fs_stderr, fs_rc = self._run_command(f"lsblk -o FSTYPE -n {device_path}")
                 fstype = fs_stdout.strip() if fs_rc == 0 else "auto"
                 
@@ -165,22 +178,46 @@ class USBMonitorService:
                 if not os.path.exists(mount_dir):
                     os.makedirs(mount_dir, exist_ok=True)
                 
-                # Пробуем монтировать напрямую через mount с sudo
-                mount_cmd = f"sudo mount -t {fstype} {device_path} {mount_dir}"
+                # Получаем UID и GID текущего пользователя
+                uid = os.getuid()
+                gid = os.getgid()
+                
+                # Монтируем с правами текущего пользователя
+                mount_options = f"uid={uid},gid={gid},dmask=022,fmask=133"
+                
+                # Пробуем монтировать напрямую с опцией uid/gid
+                if fstype.lower() in ['vfat', 'ntfs', 'exfat', 'msdos', 'fat', 'fat32']:
+                    mount_cmd = f"sudo mount -t {fstype} -o {mount_options} {device_path} {mount_dir}"
+                else:
+                    # Для других файловых систем не все опции могут работать
+                    mount_cmd = f"sudo mount -t {fstype} {device_path} {mount_dir}"
+                
                 m_stdout, m_stderr, m_rc = self._run_command(mount_cmd, shell=True)
                 
                 if m_rc == 0:
-                    logger.info(f"Устройство {device_path} успешно примонтировано в {mount_dir} через прямое монтирование")
+                    logger.info(f"Устройство {device_path} успешно примонтировано в {mount_dir}")
+                    
+                    # Проверяем, кто владелец примонтированной директории, если не текущий пользователь - меняем
+                    if os.path.exists(mount_dir):
+                        stats = os.stat(mount_dir)
+                        if stats.st_uid == 0:  # Если владелец - root
+                            try:
+                                logger.info(f"Меняем владельца {mount_dir} с root на текущего пользователя")
+                                self._run_command(f"sudo chown -R {uid}:{gid} {mount_dir}", shell=True)
+                            except Exception as e:
+                                logger.warning(f"Не удалось изменить владельца {mount_dir}: {e}")
+                    
                     return mount_dir
                 else:
-                    # Еще одна попытка - попробуем использовать fusermount, если файловая система поддерживается
+                    # Еще одна попытка - попробуем использовать fusermount
                     if fstype.lower() in ['vfat', 'ntfs', 'exfat']:
+                        fuse_cmd = ""
                         if fstype.lower() == 'ntfs':
-                            fuse_cmd = f"ntfs-3g {device_path} {mount_dir}"
+                            fuse_cmd = f"ntfs-3g -o {mount_options} {device_path} {mount_dir}"
                         elif fstype.lower() == 'exfat':
-                            fuse_cmd = f"mount.exfat {device_path} {mount_dir}"
+                            fuse_cmd = f"mount.exfat -o {mount_options} {device_path} {mount_dir}"
                         else:
-                            fuse_cmd = f"mount -t {fstype} -o uid=$(id -u),gid=$(id -g) {device_path} {mount_dir}"
+                            fuse_cmd = f"mount -t {fstype} -o {mount_options} {device_path} {mount_dir}"
                         
                         f_stdout, f_stderr, f_rc = self._run_command(fuse_cmd, shell=True)
                         
@@ -188,8 +225,7 @@ class USBMonitorService:
                             logger.info(f"Устройство {device_path} успешно примонтировано в {mount_dir} через FUSE")
                             return mount_dir
                     
-                    # Последняя попытка - попробуем читать устройство без монтирования
-                    # и создать символическую ссылку в settings.json
+                    # Последняя попытка - добавим запись, но не сможем использовать устройство
                     logger.error(f"Не удалось примонтировать {device_path}: {m_stderr}")
                     
                     # Добавляем запись в settings.json с информацией о немонтированном устройстве

@@ -44,6 +44,10 @@ class MenuItem:
             print(error_msg)
             sentry_sdk.capture_exception(e)
             return self.name if hasattr(self, 'name') else "Ошибка"
+    
+    def get_tts_text(self):
+        """Альтернативный метод для получения текста озвучки (для совместимости)"""
+        return self.get_speech_text()
 
 
 class SubMenu(MenuItem):

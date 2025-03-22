@@ -1070,4 +1070,37 @@ class AudioPlayer:
         """
         self.completion_callback = callback
         if self.debug:
-            print("Установлен колбэк завершения воспроизведения") 
+            print("Установлен колбэк завершения воспроизведения")
+    
+    def play_file(self, file_path):
+        """
+        Загружает и воспроизводит аудиофайл
+        
+        Args:
+            file_path (str): Путь к аудиофайлу
+            
+        Returns:
+            bool: True в случае успеха, False при ошибке
+        """
+        try:
+            if self.debug:
+                print(f"Воспроизведение файла: {file_path}")
+                
+            # Сначала останавливаем текущее воспроизведение
+            self.stop()
+                
+            # Загружаем файл
+            load_success = self.load_file(file_path)
+            if not load_success:
+                print(f"Ошибка при загрузке файла: {file_path}")
+                return False
+                
+            # Запускаем воспроизведение
+            play_success = self.play()
+            return play_success
+                
+        except Exception as e:
+            error_msg = f"Ошибка при воспроизведении файла: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return False 
