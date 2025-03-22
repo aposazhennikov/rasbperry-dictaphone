@@ -12,10 +12,17 @@ import magic  # для определения типа файла
 
 # Настройка логирования
 logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO,  # Поменяли с DEBUG на INFO
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("usb_monitor.log"),  # Логи идут в файл
+        logging.StreamHandler()  # И на консоль, но будут только INFO и выше
+    ]
 )
 logger = logging.getLogger(__name__)
+
+# Отключаем логи VLC
+os.environ["VLC_VERBOSE"] = "-1"  # Отключаем подробные логи VLC
 
 # Опциональная инициализация Sentry
 try:
@@ -25,9 +32,9 @@ try:
         sentry_sdk.init(dsn=SENTRY_DSN, traces_sample_rate=1.0)
         logger.info("Sentry успешно инициализирован")
     else:
-        logger.info("SENTRY_DSN не установлен, логирование в Sentry отключено")
+        logger.debug("SENTRY_DSN не установлен, логирование в Sentry отключено")
 except ImportError:
-    logger.info("sentry_sdk не установлен, логирование в Sentry отключено")
+    logger.debug("sentry_sdk не установлен, логирование в Sentry отключено")
 
 # Поддерживаемые аудио форматы
 AUDIO_EXTENSIONS = {
@@ -35,22 +42,33 @@ AUDIO_EXTENSIONS = {
     '.flac', '.alac', '.aiff', '.opus'
 }
 
+# Путь к файлу настроек
+SETTINGS_FILE = "/home/aleks/cache_tts/settings.json"
+
 class USBDeviceManager:
     def __init__(self):
         """Инициализация менеджера USB-устройств."""
-        logger.info("USB Device Manager инициализирован")
-        # Инициализируем VLC с дополнительными опциями для отладки и кодеками
-        vlc_opts = [
-            '--verbose=2',  # Подробное логирование
-            '--no-video',   # Отключаем видео
-            '--aout=alsa',  # Используем ALSA для вывода звука
-            '--codec=avcodec,all'  # Включаем все доступные кодеки
-        ]
-        self.vlc_instance = vlc.Instance(' '.join(vlc_opts))
-        self.player = self.vlc_instance.media_player_new()
-        self.current_media = None
+        try:
+            logger.debug("USB Device Manager инициализирован")
+            # Инициализируем VLC с дополнительными опциями для отладки и кодеками
+            vlc_opts = [
+                '--verbose=-1',  # Минимальное логирование
+                '--no-video',    # Отключаем видео
+                '--aout=alsa',   # Используем ALSA для вывода звука
+                '--codec=avcodec,all'  # Включаем все доступные кодеки
+            ]
+            self.vlc_instance = vlc.Instance(' '.join(vlc_opts))
+            self.player = self.vlc_instance.media_player_new()
+            self.current_media = None
+        except Exception as e:
+            logger.error(f"Ошибка при инициализации USB Device Manager: {e}")
+            try:
+                sentry_sdk.capture_exception(e)
+            except:
+                pass
+            raise
 
-    def _run_command(self, command: str, shell: bool = False) -> str:
+    def _run_command(self, command: str, shell: bool = False) -> Tuple[str, str, int]:
         """
         Выполнение shell-команды и получение результата.
         
@@ -59,7 +77,7 @@ class USBDeviceManager:
             shell (bool): Использовать ли shell для выполнения команды
 
         Returns:
-            str: Результат выполнения команды
+            Tuple[str, str, int]: (stdout, stderr, returncode)
         """
         try:
             if shell:
@@ -68,56 +86,50 @@ class USBDeviceManager:
                 result = subprocess.run(command.split(), capture_output=True, text=True)
             
             if result.returncode != 0:
-                logger.error(f"Команда вернула ошибку: {result.stderr}")
-            return result.stdout
+                logger.error(f"Команда '{command}' вернула ошибку: {result.stderr}")
+            return result.stdout, result.stderr, result.returncode
         except subprocess.CalledProcessError as e:
             logger.error(f"Ошибка при выполнении команды {command}: {e}")
-            return ""
+            try:
+                sentry_sdk.capture_exception(e)
+            except:
+                pass
+            return "", str(e), 1
 
-    def _get_block_devices(self) -> dict:
+    def _is_device_mounted(self, device: str) -> Tuple[bool, str]:
         """
-        Получение информации о блочных устройствах через lsblk.
+        Проверяет, примонтировано ли устройство.
         
+        Args:
+            device (str): Путь к устройству
+
         Returns:
-            dict: Информация о блочных устройствах
+            Tuple[bool, str]: (примонтировано, точка монтирования)
         """
         try:
-            output = self._run_command("lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,LABEL,VENDOR,MODEL,SERIAL -J")
-            logger.debug(f"lsblk output: {output}")
-            return json.loads(output)
-        except json.JSONDecodeError as e:
-            logger.error(f"Ошибка при разборе JSON от lsblk: {e}")
-            return {"blockdevices": []}
+            # Проверяем через findmnt
+            stdout, stderr, rc = self._run_command(f"findmnt -n -o TARGET {device}")
+            if rc == 0 and stdout.strip():
+                mount_point = stdout.strip()
+                logger.debug(f"Устройство {device} уже примонтировано в {mount_point}")
+                return True, mount_point
 
-    def _get_usb_devices(self) -> List[Dict[str, str]]:
-        """
-        Получение списка USB-устройств через различные системные команды.
-        
-        Returns:
-            List[Dict[str, str]]: Список информации о USB-устройствах
-        """
-        try:
-            lsusb_output = self._run_command("lsusb")
-            logger.debug(f"lsusb output: {lsusb_output}")
+            # Дополнительная проверка через /proc/mounts
+            with open('/proc/mounts', 'r') as f:
+                for line in f:
+                    if device in line:
+                        mount_point = line.split()[1]
+                        logger.debug(f"Устройство {device} найдено в /proc/mounts: {mount_point}")
+                        return True, mount_point
 
-            devices = []
-            for sdx in self._run_command("ls /dev/sd*", shell=True).splitlines():
-                if not sdx:
-                    continue
-                    
-                udevadm_output = self._run_command(f"udevadm info --query=property {sdx}")
-                logger.debug(f"udevadm output for {sdx}: {udevadm_output}")
-                
-                if "ID_BUS=usb" in udevadm_output:
-                    devices.append({
-                        'device': sdx,
-                        'udevadm_info': udevadm_output
-                    })
-                    
-            return devices
+            return False, ""
         except Exception as e:
-            logger.error(f"Ошибка при получении списка USB-устройств: {e}")
-            return []
+            logger.error(f"Ошибка при проверке монтирования {device}: {e}")
+            try:
+                sentry_sdk.capture_exception(e)
+            except:
+                pass
+            return False, ""
 
     def _mount_device(self, device: str) -> str:
         """
@@ -130,17 +142,23 @@ class USBDeviceManager:
             str: Точка монтирования или пустая строка
         """
         try:
-            # Используем udisksctl для монтирования
-            result = self._run_command(f"udisksctl mount -b {device}")
+            # Проверяем, примонтировано ли уже устройство
+            is_mounted, mount_point = self._is_device_mounted(device)
+            if is_mounted:
+                logger.info(f"Устройство {device} уже примонтировано в {mount_point}")
+                return mount_point
+
+            # Если не примонтировано, монтируем
+            stdout, stderr, rc = self._run_command(f"udisksctl mount -b {device}")
             
             # udisksctl возвращает строку вида "Mounted /dev/sda1 at /run/media/user/LABEL"
-            if "at " in result:
-                mount_point = result.split("at ")[-1].strip()
+            if rc == 0 and "at " in stdout:
+                mount_point = stdout.split("at ")[-1].strip()
                 logger.info(f"Устройство {device} успешно примонтировано в {mount_point}")
                 return mount_point
-                
-            logger.error(f"Не удалось примонтировать {device}")
-            return ""
+            else:
+                logger.error(f"Не удалось примонтировать {device}: {stderr}")
+                return ""
             
         except Exception as e:
             logger.error(f"Ошибка при монтировании {device}: {e}")
@@ -155,42 +173,133 @@ class USBDeviceManager:
         """
         try:
             devices = []
-            block_devices = self._get_block_devices()
-            usb_devices = self._get_usb_devices()
-
-            logger.info(f"Найдено USB-устройств: {len(usb_devices)}")
-            logger.debug(f"USB devices: {usb_devices}")
+            # Получаем список блочных устройств
+            stdout, stderr, rc = self._run_command("lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,LABEL,VENDOR,MODEL,SERIAL,FSTYPE -J")
+            if rc != 0:
+                logger.error(f"Ошибка выполнения lsblk: {stderr}")
+                return []
             
-            for usb_device in usb_devices:
-                device_path = usb_device['device']
-                logger.debug(f"Processing device: {device_path}")
-                
-                # Пропускаем основное устройство, если это диск
-                if not device_path.endswith(('1', '2', '3', '4', '5')):
+            block_devices = json.loads(stdout)
+            
+            # Получаем список USB устройств
+            stdout, stderr, rc = self._run_command("ls /dev/sd* 2>/dev/null", shell=True)
+            if rc != 0 and not stdout:
+                logger.error(f"Ошибка при поиске USB устройств: {stderr}")
+                return []
+
+            # Обрабатываем каждое найденное устройство
+            for sdx in stdout.splitlines():
+                if not sdx:
                     continue
+
+                # Проверяем, является ли устройство разделом (имеет цифру в конце)
+                if not any(c.isdigit() for c in sdx):
+                    continue
+
+                # Проверяем, является ли устройство USB
+                stdout, stderr, rc = self._run_command(f"udevadm info --query=property {sdx}")
+                if rc != 0:
+                    logger.error(f"Ошибка получения информации об устройстве {sdx}: {stderr}")
+                    continue
+
+                if "ID_BUS=usb" not in stdout:
+                    logger.debug(f"Устройство {sdx} не является USB устройством")
+                    continue
+
+                logger.info(f"Найдено USB-устройство: {sdx}")
                 
-                # Проверяем, примонтировано ли устройство
-                mount_point = ""
+                # Получаем информацию об устройстве из lsblk
+                device_info = None
                 for device in block_devices.get('blockdevices', []):
-                    if f"/dev/{device['name']}" == device_path:
-                        mount_point = device.get('mountpoint', '')
+                    device_name = f"/dev/{device['name']}"
+                    if device_name == sdx or any(f"/dev/{child['name']}" == sdx for child in device.get('children', [])):
+                        # Проверяем, есть ли дети (разделы) для этого устройства
+                        if device.get('children'):
+                            for child in device['children']:
+                                if f"/dev/{child['name']}" == sdx:
+                                    device_info = {
+                                        'name': child.get('label', 'Без метки'),
+                                        'size': child.get('size', 'Неизвестно'),
+                                        'mount_point': child.get('mountpoint', ''),
+                                        'device': sdx,
+                                        'fstype': child.get('fstype', 'Неизвестно')
+                                    }
+                                    break
+                        else:
+                            device_info = {
+                                'name': device.get('label', 'Без метки'),
+                                'size': device.get('size', 'Неизвестно'),
+                                'mount_point': device.get('mountpoint', ''),
+                                'device': sdx,
+                                'fstype': device.get('fstype', 'Неизвестно')
+                            }
                         break
                 
-                # Если устройство не примонтировано, монтируем его
-                if not mount_point:
-                    mount_point = self._mount_device(device_path)
-                
+                if not device_info:
+                    logger.warning(f"Не удалось получить информацию о устройстве {sdx}")
+                    continue
+
+                # Пытаемся получить точку монтирования
+                mount_point = self._mount_device(sdx)
                 if mount_point:
-                    devices.append({
-                        'device': device_path,
-                        'mount_point': mount_point
-                    })
+                    device_info['mount_point'] = mount_point
+                    device_info['is_mounted'] = True
+                    devices.append(device_info)
+                    logger.info(f"Добавлено устройство: {device_info}")
+                else:
+                    logger.warning(f"Не удалось примонтировать устройство {sdx}")
+            
+            logger.info(f"Найдено примонтированных USB-устройств: {len(devices)}")
+            
+            # Обновляем настройки
+            self._update_settings(devices)
             
             return devices
             
         except Exception as e:
             logger.error(f"Ошибка при получении списка примонтированных USB-устройств: {e}")
+            try:
+                sentry_sdk.capture_exception(e)
+            except:
+                pass
             return []
+    
+    def _update_settings(self, devices: List[Dict[str, str]]) -> None:
+        """
+        Обновляет файл настроек информацией о USB-устройствах.
+        
+        Args:
+            devices: Список устройств
+        """
+        try:
+            if not os.path.exists(os.path.dirname(SETTINGS_FILE)):
+                os.makedirs(os.path.dirname(SETTINGS_FILE))
+                
+            # Загружаем текущие настройки
+            settings = {}
+            if os.path.exists(SETTINGS_FILE):
+                with open(SETTINGS_FILE, 'r') as f:
+                    settings = json.load(f)
+            
+            # Обновляем информацию о USB-устройствах
+            settings['usb_devices'] = [
+                {
+                    'name': device['name'],
+                    'size': device['size'],
+                    'mount_point': device['mount_point'],
+                    'filesystem': device.get('fstype', 'Неизвестно'),
+                    'is_connected': True
+                } for device in devices
+            ]
+            
+            # Сохраняем обновленные настройки
+            with open(SETTINGS_FILE, 'w') as f:
+                json.dump(settings, f, indent=4, ensure_ascii=False)
+                
+            logger.info(f"Настройки обновлены: {len(devices)} устройств")
+            
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении настроек: {e}")
 
     def _is_audio_file(self, filename: str) -> bool:
         """
@@ -274,11 +383,6 @@ class USBDeviceManager:
             self.current_media = self.vlc_instance.media_new(file_path)
             for opt in media_opts:
                 self.current_media.add_option(opt)
-            
-            # Устанавливаем обработчики событий
-            event_manager = self.current_media.event_manager()
-            event_manager.event_attach(vlc.EventType.MediaStateChanged, 
-                                     lambda e: logger.debug(f"Состояние медиа изменилось: {e.type}"))
             
             self.player.set_media(self.current_media)
             
