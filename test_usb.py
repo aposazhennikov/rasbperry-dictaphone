@@ -408,9 +408,13 @@ class USBDeviceManager:
             
             if duration > 0:
                 print(f"Длительность: {duration:.2f} сек")
-                # Ждем окончания воспроизведения
-                while self.player.is_playing():
-                    time.sleep(0.1)
+                # Воспроизводим файл и ждем окончания
+                self.player.play_file(file_path)
+                
+                # Проверяем, начал ли плеер воспроизведение
+                if self.player.is_playing:
+                    if self.debug:
+                        print(f"Воспроизведение файла начато: {file_path}")
             else:
                 logger.warning(f"Не удалось определить длительность файла {file_path}")
                 print("Ошибка: не удалось определить длительность файла")
@@ -423,7 +427,7 @@ class USBDeviceManager:
 
     def _stop_playback(self) -> None:
         """Остановка воспроизведения."""
-        if self.player.is_playing():
+        if self.player.is_playing:
             self.player.stop()
             time.sleep(0.1)  # Даем время на остановку
 

@@ -6,6 +6,8 @@ import logging
 import shutil
 from typing import List, Dict, Optional, Tuple
 import sentry_sdk
+import time
+import glob
 
 # Отключаем отладочные сообщения от Sentry
 logging.getLogger('sentry_sdk.errors').setLevel(logging.INFO)
@@ -156,7 +158,7 @@ class ExternalStorageMenu(BaseMenu):
                 logger.debug(f"Проверка устройства: {device.get('device', 'Неизвестно')}")
                 
                 # Проверяем, есть ли все необходимые поля
-                if not all(k in device for k in ['mount_point', 'device', 'name', 'size']):
+                if not all(k in device for k in ['mount_point', 'device', 'name']):
                     logger.warning(f"Устройство {i} не содержит всех необходимых полей: {device}")
                     continue
                     
@@ -165,14 +167,20 @@ class ExternalStorageMenu(BaseMenu):
                     device_name = device['name']
                     if device_name == device['device'].split('/')[-1]:
                         device_name = f"Флешка {i}"
-                        
+                    else:
+                        # Добавляем слово "Флешка" перед именем устройства
+                        device_name = f"Флешка {device_name}"
+                    
+                    # Используем свободное место с новым форматом отображения
+                    free_space = device.get('size', 'Неизвестно')  # size теперь содержит свободное место
+                    
                     menu_items.append({
-                        'title': f"{device_name} ({device['size']})",
+                        'title': f"{device_name} ({free_space})",
                         'mount_point': device['mount_point'],
                         'device': device['device'],
                         'filesystem': device.get('filesystem', 'Неизвестно')
                     })
-                    logger.info(f"Добавлено устройство в меню: {device_name}")
+                    logger.info(f"Добавлено устройство в меню: {device_name} со свободным местом {free_space}")
                 else:
                     logger.warning(f"Устройство {device['device']} указано как подключенное, но недоступно")
                     sentry_sdk.capture_message(f"Устройство {device['device']} недоступно, хотя помечено как подключенное", level="warning")
@@ -182,7 +190,7 @@ class ExternalStorageMenu(BaseMenu):
             logger.error(f"Ошибка при получении списка USB-накопителей: {e}")
             sentry_sdk.capture_exception(e)
             return []
-    
+
     def _is_device_available(self, device: Dict) -> bool:
         """
         Проверяет, доступно ли устройство.
@@ -227,8 +235,12 @@ class ExternalStorageMenu(BaseMenu):
         try:
             from menu.menu_item import MenuItem, SubMenu
             
+            # Проверяем, является ли это корнем флешки или подпапкой
+            is_root = mount_point in [dev.get('mount_point', '') for dev in self._get_usb_menu_items()]
+            
             # Создаем новое подменю для просмотра файлов
-            files_menu = SubMenu(name=f"Файлы на флешке")
+            folder_name = os.path.basename(mount_point) if not is_root else "Файлы на флешке"
+            files_menu = SubMenu(name=folder_name)
             
             # Проверяем доступность пути
             if not os.path.exists(mount_point) or not os.path.isdir(mount_point):
@@ -295,8 +307,29 @@ class ExternalStorageMenu(BaseMenu):
                 )
                 files_menu.add_item(empty_item)
                 
-            # Устанавливаем родительское меню
-            parent_menu = self.current_menu if hasattr(self, 'current_menu') else self
+            # Устанавливаем правильное родительское меню для иерархической навигации
+            if is_root:
+                # Если это корень флешки, родитель - меню устройства
+                parent_menu = self.current_menu if hasattr(self, 'current_menu') else self
+            else:
+                # Если это подпапка, родитель - меню верхнего уровня
+                parent_dir = os.path.dirname(mount_point)
+                
+                # Если мы вызваны из меню устройства, сохраняем в родитель меню устройства
+                if parent_dir == os.path.dirname(os.path.dirname(mount_point)):
+                    parent_menu = self.current_menu if hasattr(self, 'current_menu') else self
+                else:
+                    # Создаем действие для возврата в родительскую папку
+                    parent_menu_action = lambda: self._list_files(parent_dir)
+                    
+                    # Если self.menu_manager существует, выполняем родительское меню
+                    if hasattr(self, 'menu_manager') and self.menu_manager:
+                        parent_menu = parent_menu_action()
+                    else:
+                        # Или создаем временное меню для навигации
+                        tmp_menu = SubMenu(name=os.path.basename(parent_dir))
+                        parent_menu = tmp_menu
+            
             files_menu.parent = parent_menu
             
             return files_menu
@@ -315,7 +348,7 @@ class ExternalStorageMenu(BaseMenu):
             
     def _play_audio_file(self, file_path: str):
         """
-        Воспроизводит аудио файл напрямую через playback_manager.
+        Воспроизводит аудио файл через стандартный аудиоплеер.
         
         Args:
             file_path (str): Путь к аудио файлу
@@ -325,44 +358,127 @@ class ExternalStorageMenu(BaseMenu):
         """
         try:
             logger.info(f"Воспроизведение аудио файла с флешки: {file_path}")
+            sentry_sdk.add_breadcrumb(
+                category='playback',
+                message=f'Попытка воспроизведения файла с флешки: {file_path}',
+                level='info'
+            )
             
             # Проверяем доступность файла
             if not os.path.exists(file_path):
                 logger.error(f"Файл не найден: {file_path}")
+                sentry_sdk.capture_message(f"Файл для воспроизведения не найден: {file_path}", level="error")
                 return "Ошибка: файл не найден"
                 
-            # Здесь мы будем использовать существующий плеер из MenuManager
-            if hasattr(self, 'menu_manager') and self.menu_manager and hasattr(self.menu_manager, 'playback_manager'):
-                # Формируем информацию о воспроизводимом файле
-                playback_manager = self.menu_manager.playback_manager
-                player = playback_manager.player
+            # Проверка наличия и инициализации необходимых компонентов
+            if not hasattr(self, 'menu_manager'):
+                logger.error("Ошибка: menu_manager не инициализирован")
+                sentry_sdk.capture_message("menu_manager не инициализирован в ExternalStorageMenu", level="error")
+                return "Ошибка: menu_manager не инициализирован"
                 
-                # Останавливаем текущее воспроизведение если есть
-                if player.is_playing():
-                    player.stop()
+            if not self.menu_manager:
+                logger.error("Ошибка: menu_manager равен None")
+                sentry_sdk.capture_message("menu_manager равен None в ExternalStorageMenu", level="error")
+                return "Ошибка: menu_manager не доступен"
                 
-                # Отображаем информацию на экране с помощью display_manager
-                file_name = os.path.basename(file_path)
-                if hasattr(self.menu_manager, 'display_manager') and self.menu_manager.display_manager:
-                    self.menu_manager.display_manager.display_message(
-                        f"Воспроизведение: {file_name}", 
-                        title="Аудиоплеер"
-                    )
+            if not hasattr(self.menu_manager, 'playback_manager'):
+                logger.error("Ошибка: playback_manager не найден в menu_manager")
+                sentry_sdk.capture_message("playback_manager не найден в menu_manager", level="error")
+                return "Ошибка: playback_manager не доступен"
                 
-                # Воспроизводим файл напрямую
-                result = player.play_file(file_path)
+            if not self.menu_manager.playback_manager:
+                logger.error("Ошибка: playback_manager равен None")
+                sentry_sdk.capture_message("playback_manager равен None в menu_manager", level="error")
+                return "Ошибка: playback_manager не инициализирован"
                 
-                # Активируем режим аудиоплеера
-                self.menu_manager.player_mode_active = True
+            # Проверка, что текущее меню установлено правильно
+            if not hasattr(self.menu_manager, 'current_menu') or not self.menu_manager.current_menu:
+                logger.error("Ошибка: current_menu не установлено в menu_manager")
+                sentry_sdk.capture_message("current_menu не установлено в menu_manager", level="error")
+                return "Ошибка: current_menu не доступно"
                 
-                return result
-            else:
-                logger.error("Нет доступа к playback_manager для воспроизведения")
-                return "Ошибка воспроизведения: нет доступа к плееру"
+            # Дополнительное логирование для отладки
+            logger.info(f"Текущее меню перед воспроизведением: {self.menu_manager.current_menu.name if hasattr(self.menu_manager.current_menu, 'name') else 'Неизвестно'}")
+            
+            # Используем существующий плеер из MenuManager
+            # Запоминаем текущее меню для возврата
+            self.menu_manager.source_menu = self.menu_manager.current_menu
+            logger.info(f"Установлено source_menu для возврата: {self.menu_manager.source_menu.name if hasattr(self.menu_manager.source_menu, 'name') else 'Неизвестно'}")
+            
+            # Создаем временный список файлов из текущей директории
+            directory = os.path.dirname(file_path)
+            
+            # Получаем все аудиофайлы в директории
+            audio_files = []
+            for ext in self.AUDIO_EXTENSIONS:
+                audio_files.extend(glob.glob(os.path.join(directory, f"*{ext}")))
+            
+            # Сортируем файлы по имени
+            audio_files.sort()
+            
+            logger.info(f"Найдено {len(audio_files)} аудиофайлов в директории {directory}")
+            
+            if not audio_files:
+                logger.error(f"В директории {directory} не найдено аудиофайлов")
+                sentry_sdk.capture_message(f"В директории {directory} не найдено аудиофайлов", level="error")
+                return "Ошибка: нет аудиофайлов в директории"
+                
+            # Находим индекс текущего файла в списке
+            try:
+                current_index = audio_files.index(file_path)
+                logger.info(f"Найден индекс текущего файла в списке: {current_index}")
+            except ValueError:
+                current_index = 0
+                if audio_files:
+                    # Если файл не найден в списке, но список не пуст, используем первый файл
+                    file_path = audio_files[0]
+                    logger.warning(f"Файл не найден в списке, используем первый файл: {file_path}")
+                    sentry_sdk.capture_message(f"Файл не найден в списке, используем первый файл: {file_path}", level="warning")
+            
+            # Настраиваем playback_manager на работу с файлами из флешки
+            playback_manager = self.menu_manager.playback_manager
+            playback_manager.files_list = audio_files
+            playback_manager.current_folder = directory
+            
+            # Устанавливаем текущий файл
+            set_file_result = playback_manager.set_current_file(current_index)
+            if not set_file_result:
+                logger.error(f"Не удалось установить текущий файл с индексом {current_index}")
+                sentry_sdk.capture_message(f"Не удалось установить текущий файл с индексом {current_index}", level="error")
+                return "Ошибка: не удалось установить текущий файл"
+            
+            # Активируем режим аудиоплеера
+            self.menu_manager.player_mode_active = True
+            logger.info("Активирован режим аудиоплеера")
+            
+            # Добавляем задержку, чтобы дать возможность завершиться озвучиванию имени файла
+            # прежде чем начать воспроизведение самого файла
+            time.sleep(1.5)
+            
+            # Воспроизводим файл
+            result = playback_manager.play_current_file()
+            
+            if not result:
+                logger.error(f"Не удалось воспроизвести файл: {file_path}")
+                sentry_sdk.capture_message(f"Не удалось воспроизвести файл: {file_path}", level="error")
+                # Деактивируем режим аудиоплеера в случае ошибки
+                self.menu_manager.player_mode_active = False
+                return "Ошибка воспроизведения"
+            
+            logger.info(f"Воспроизведение файла начато: {file_path}")
+            sentry_sdk.add_breadcrumb(
+                category='playback',
+                message=f'Успешно начато воспроизведение файла: {file_path}',
+                level='info'
+            )
+            return "Воспроизведение"
                 
         except Exception as e:
             logger.error(f"Ошибка при воспроизведении аудио: {e}")
             sentry_sdk.capture_exception(e)
+            # Деактивируем режим аудиоплеера в случае исключения
+            if hasattr(self, 'menu_manager') and self.menu_manager:
+                self.menu_manager.player_mode_active = False
             return f"Ошибка воспроизведения: {str(e)}"
             
     def _view_text_file(self, file_path: str):
@@ -436,7 +552,8 @@ class ExternalStorageMenu(BaseMenu):
                 
             # Получаем размер свободного места на флешке
             free_space = self._get_free_space(mount_point)
-            logger.info(f"Свободное место на флешке: {self._format_size(free_space)}")
+            free_space_str = self._format_size(free_space)
+            logger.info(f"Свободное место на флешке: {free_space_str}")
             
             # Папки для поиска записей
             folders = ["A", "B", "C"]
@@ -513,9 +630,16 @@ class ExternalStorageMenu(BaseMenu):
             int: Размер свободного места в байтах
         """
         try:
-            stat = os.statvfs(path)
-            # Свободное место = размер блока * количество свободных блоков
-            return stat.f_frsize * stat.f_bavail
+            # Проверяем доступность пути
+            if not os.path.exists(path):
+                logger.error(f"Путь {path} не существует")
+                return 0
+                
+            # Используем shutil.disk_usage для получения информации о диске
+            import shutil
+            _, _, free = shutil.disk_usage(path)
+            logger.info(f"Свободное место на {path}: {self._format_size(free)}")
+            return free
         except Exception as e:
             logger.error(f"Ошибка при получении свободного места: {e}")
             sentry_sdk.capture_exception(e)
@@ -546,33 +670,25 @@ class ExternalStorageMenu(BaseMenu):
     
     def _format_size(self, size_bytes: int) -> str:
         """
-        Форматирует размер в байтах в читаемый вид.
+        Форматирует размер в байтах в читабельный вид.
         
         Args:
             size_bytes (int): Размер в байтах
             
         Returns:
-            str: Отформатированный размер
+            str: Отформатированный размер в формате 'Гигабайт: X, Мегабайт: Y'
         """
         try:
-            if size_bytes < 1024:
-                return f"{size_bytes} байт"
+            # Вычисляем количество гигабайт и мегабайт
+            gigabytes = int(size_bytes // (1024 * 1024 * 1024))
+            megabytes = int((size_bytes % (1024 * 1024 * 1024)) // (1024 * 1024))
             
-            kb = size_bytes / 1024
-            if kb < 1024:
-                return f"{kb:.1f} Кб"
-                
-            mb = kb / 1024
-            if mb < 1024:
-                return f"{int(mb)} Мб"
-                
-            gb = mb / 1024
-            mb_remainder = int((gb - int(gb)) * 1024)
-            return f"{int(gb)} Гб {mb_remainder} Мб"
+            # Формируем строку в новом формате
+            return f"Гигабайт: {gigabytes}, Мегабайт: {megabytes}"
         except Exception as e:
             logger.error(f"Ошибка при форматировании размера: {e}")
             sentry_sdk.capture_exception(e)
-            return "Неизвестный размер"
+            return "Неизвестно"
     
     def _perform_copy_operation(self, source_path: str, dest_path: str, required_space: int, available_space: int, copy_all=False) -> str:
         """
@@ -634,23 +750,40 @@ class ExternalStorageMenu(BaseMenu):
             success_msg = "Копирование успешно завершено"
             logger.info(success_msg)
             
+            # После копирования обновляем информацию о свободном месте
+            new_free_space = self._get_free_space(dest_path)
+            formatted_free_space = self._format_size(new_free_space)
+            success_msg_with_space = f"{success_msg}. Осталось места: {formatted_free_space}"
+            
             # Если есть menu_manager, отображаем и озвучиваем успех
             if hasattr(self, 'menu_manager') and self.menu_manager:
                 if hasattr(self.menu_manager, 'display_manager'):
                     self.menu_manager.display_manager.display_message(
-                        success_msg,
+                        success_msg_with_space,
                         title="Копирование на флешку"
                     )
                 if hasattr(self.menu_manager, 'tts_manager'):
                     voice = self.menu_manager.settings_manager.get_voice()
-                    self.menu_manager.tts_manager.play_speech(success_msg, voice_id=voice)
+                    # Блокирующее воспроизведение сообщения об успешном копировании
+                    self.menu_manager.tts_manager.play_speech_blocking("Копирование успешно завершено", voice_id=voice)
                 
-                # Возвращаемся в меню внешнего носителя
+                # Возвращаемся в меню устройства после успешного копирования
                 if hasattr(self.menu_manager, 'current_menu') and hasattr(self.menu_manager.current_menu, 'parent'):
-                    logger.info(f"Возвращаемся в родительское меню после копирования: {self.menu_manager.current_menu.parent}")
-                    # Не меняем текущее меню напрямую, так как это должно делаться через menu_manager
+                    parent_menu = self.menu_manager.current_menu.parent
+                    logger.info(f"Возвращаемся в родительское меню после копирования: {parent_menu}")
+                    
+                    # Озвучиваем возврат в родительское меню
+                    if hasattr(self.menu_manager, 'tts_manager'):
+                        self.menu_manager.tts_manager.play_speech_blocking("Возврат в режим внешнего носителя", voice_id=voice)
+                    
+                    # Непосредственно устанавливаем текущее меню
+                    self.menu_manager.current_menu = parent_menu
+                    
+                    # Отображаем родительское меню
+                    if hasattr(self.menu_manager, 'display_current_menu'):
+                        self.menu_manager.display_current_menu()
             
-            return success_msg
+            return success_msg_with_space
             
         except PermissionError:
             error_msg = "Нет прав для копирования файлов на флешку"
@@ -766,7 +899,7 @@ class ExternalStorageMenu(BaseMenu):
             device_menu.parent = self
             
             return device_menu  # Возвращаем новое подменю для перехода в него
-            
+                    
         except Exception as e:
             logger.error(f"Ошибка при работе с меню USB-накопителя: {e}")
             sentry_sdk.capture_exception(e)
@@ -875,11 +1008,16 @@ class ExternalStorageMenu(BaseMenu):
             
             # Если устройства найдены, добавляем их в меню
             if usb_devices:
-                for device in usb_devices:
+                for i, device in enumerate(usb_devices, 1):
+                    # Убедимся, что название устройства начинается со слова "Флешка"
+                    title = device['title']
+                    if not title.startswith("Флешка"):
+                        title = f"Флешка {title}"
+                    
                     # Создаем пункт меню для каждого устройства
                     device_item = MenuItem(
-                        name=device['title'], 
-                        speech_text=device['title'],
+                        name=title, 
+                        speech_text=title,
                         action=lambda dev=device: self.create_device_menu(dev)
                     )
                     self.add_item(device_item)
@@ -920,6 +1058,10 @@ class ExternalStorageMenu(BaseMenu):
             mount_point = device_info.get('mount_point', '')
             filesystem = device_info.get('filesystem', 'Неизвестно')
             
+            # Убедимся, что название устройства начинается со слова "Флешка"
+            if not device_name.startswith("Флешка"):
+                device_name = f"Флешка {device_name}"
+            
             # Проверяем, что точка монтирования существует
             if not os.path.exists(mount_point):
                 logger.error(f"Точка монтирования не существует: {mount_point}")
@@ -931,8 +1073,22 @@ class ExternalStorageMenu(BaseMenu):
                 error_menu.parent = self
                 return error_menu
             
-            # Создаем меню с именем устройства
-            device_menu = SubMenu(name=device_name)
+            # Обновляем информацию о свободном месте
+            free_space = "Неизвестно"
+            if os.path.exists(mount_point):
+                try:
+                    import shutil
+                    total, used, free = shutil.disk_usage(mount_point)
+                    gigabytes = int(free // (1024 * 1024 * 1024))
+                    megabytes = int((free % (1024 * 1024 * 1024)) // (1024 * 1024))
+                    free_space = f"Гигабайт: {gigabytes}, Мегабайт: {megabytes}"
+                except Exception as e:
+                    logger.error(f"Ошибка при получении свободного места для {mount_point}: {e}")
+                    sentry_sdk.capture_exception(e)
+            
+            # Создаем меню с именем устройства, включая информацию о свободном месте
+            menu_name = f"{device_name} ({free_space})"
+            device_menu = SubMenu(name=menu_name)
             
             # Сохраняем информацию об устройстве в меню
             device_menu.device_info = device_info
@@ -953,7 +1109,7 @@ class ExternalStorageMenu(BaseMenu):
             # Устанавливаем родительское меню
             device_menu.parent = self
             
-            logger.info(f"Создано меню для устройства: {device_name}")
+            logger.info(f"Создано меню для устройства: {menu_name}")
             
             return device_menu
             

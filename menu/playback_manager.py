@@ -248,8 +248,9 @@ class PlaybackManager:
         seconds = int(duration) % 60
         duration_str = f"{minutes:02d}:{seconds:02d}"
         
-        # Формируем человекоразумное описание
-        description = f"Запись от {date_str}, {time_str}"
+        # Формируем человекоразумное описание через метод get_human_readable_filename
+        # который уже содержит логику для разных типов файлов
+        description = self.get_human_readable_filename(file_path)
         
         return {
             "path": file_path,
@@ -312,7 +313,36 @@ class PlaybackManager:
         file_name = os.path.basename(file_path)
         file_base = os.path.splitext(file_name)[0]
         
-        # Получаем дату создания
+        # Проверяем, находится ли файл на внешнем носителе 
+        # (пути обычно начинаются с /media/ или /mnt/)
+        if "/media/" in file_path or "/mnt/" in file_path:
+            # Для файлов с флешки проверяем, имеет ли имя формат даты YYYY-MM-DD-HH-MM-SS
+            import re
+            date_pattern = re.compile(r'(\d{4})-(\d{2})-(\d{2})-(\d{2})-(\d{2})-(\d{2})')
+            match = date_pattern.match(file_base)
+            
+            if match:
+                # Если имя файла соответствует формату даты, преобразуем его в читаемую форму
+                year, month, day, hour, minute, second = match.groups()
+                try:
+                    month_names = ["января", "февраля", "марта", "апреля", "мая", "июня", 
+                                  "июля", "августа", "сентября", "октября", "ноября", "декабря"]
+                    month_name = month_names[int(month) - 1]
+                    
+                    # Форматирование числа с правильными окончаниями
+                    day_str = day
+                    if day.startswith('0'):
+                        day_str = day[1:]
+                    
+                    return f"Запись от {day_str} {month_name} {year} года, {hour} часов {minute} минут"
+                except:
+                    # Если не удалось преобразовать, вернем исходное имя
+                    return file_base
+            else:
+                # Для обычных файлов возвращаем имя без изменений
+                return file_base
+            
+        # Для внутренних файлов диктофона используем дату создания
         try:
             file_created = datetime.fromtimestamp(os.path.getmtime(file_path))
             date_str = file_created.strftime("%d.%m.%Y")
@@ -345,6 +375,8 @@ class PlaybackManager:
         # Останавливаем текущее воспроизведение, если оно активно
         if self.player.is_active():
             self.player.stop()
+            # Небольшая пауза после остановки воспроизведения
+            time.sleep(0.5)
         
         # Переходим к следующему файлу
         self.current_index = (self.current_index + 1) % len(self.files_list)
@@ -352,8 +384,17 @@ class PlaybackManager:
         # Обновляем информацию о файле
         file_info = self.get_current_file_info()
         if file_info:
-            # Озвучиваем название файла
-            self.tts_manager.play_speech(file_info["description"])
+            # Озвучиваем переключение с полной фразой
+            message = f"Переключаю вперед на {file_info['description']}"
+            if self.tts_manager:
+                try:
+                    # Используем блокирующий режим для гарантированного окончания сообщения
+                    self.tts_manager.play_speech_blocking(message)
+                    # Дополнительная пауза после сообщения
+                    time.sleep(0.5)
+                except Exception as e:
+                    print(f"Ошибка при озвучивании переключения: {e}")
+                    sentry_sdk.capture_exception(e)
             
             # Обновляем интерфейс
             if self.update_callback:
@@ -376,6 +417,8 @@ class PlaybackManager:
         # Останавливаем текущее воспроизведение, если оно активно
         if self.player.is_active():
             self.player.stop()
+            # Небольшая пауза после остановки воспроизведения
+            time.sleep(0.5)
         
         # Переходим к предыдущему файлу
         self.current_index = (self.current_index - 1) % len(self.files_list)
@@ -383,8 +426,17 @@ class PlaybackManager:
         # Обновляем информацию о файле
         file_info = self.get_current_file_info()
         if file_info:
-            # Озвучиваем название файла
-            self.tts_manager.play_speech(file_info["description"])
+            # Озвучиваем переключение с полной фразой
+            message = f"Переключаю назад на {file_info['description']}"
+            if self.tts_manager:
+                try:
+                    # Используем блокирующий режим для гарантированного окончания сообщения
+                    self.tts_manager.play_speech_blocking(message)
+                    # Дополнительная пауза после сообщения
+                    time.sleep(0.5)
+                except Exception as e:
+                    print(f"Ошибка при озвучивании переключения: {e}")
+                    sentry_sdk.capture_exception(e)
             
             # Обновляем интерфейс
             if self.update_callback:
@@ -437,6 +489,7 @@ class PlaybackManager:
                 self.playback_info["duration"] = self.player.get_formatted_duration()
                 
                 # Обновляем интерфейс
+                # Получаем информацию о файле, но НЕ озвучиваем его
                 file_info = self.get_current_file_info()
                 if self.update_callback:
                     self.update_callback()
@@ -886,66 +939,21 @@ class PlaybackManager:
                         if self.debug:
                             print("Переключение на следующий трек")
                         
-                        # Проверяем, есть ли следующий трек
-                        next_index = (self.current_index + 1) % len(self.files_list)
-                        if next_index == 0 and self.current_index == len(self.files_list) - 1:
-                            # Мы на последнем треке
-                            message = "Достигнут конец списка воспроизведения"
-                            if self.debug:
-                                print(message)
-                            if self.tts_manager:
-                                self.tts_manager.play_speech(message)
-                            sentry_sdk.add_breadcrumb(
-                                category='playback',
-                                message='Попытка переключения вперед на последнем треке',
-                                level='info'
-                            )
-                            return True
-                        
                         # Останавливаем текущее воспроизведение
                         if self.player.is_active():
                             self.player.stop()
+                            # Небольшая пауза после остановки
+                            time.sleep(0.5)
                         
-                        # Получаем информацию о следующем треке перед переключением
-                        next_file_info = self.get_file_info(next_index)
+                        # Переключаем трек
+                        result = self.move_to_next_file()
                         
-                        if next_file_info:
-                            # Озвучиваем переключение и ждем завершения
-                            message = f"Переключаю вперед на {next_file_info['description']}"
-                            if self.tts_manager:
-                                if self.debug:
-                                    print(f"Воспроизведение сообщения: {message}")
-                                try:
-                                    # Останавливаем текущее воспроизведение перед системным сообщением
-                                    if self.player.is_active():
-                                        self.player.stop()
-                                    
-                                    # Используем блокирующий метод для гарантированного завершения системного сообщения
-                                    if self.debug:
-                                        print("Воспроизведение системного сообщения (блокирующий режим)")
-                                    self.tts_manager.play_speech_blocking(message)
-                                    
-                                    # Дополнительная пауза после системного сообщения
-                                    time.sleep(0.5)
-                                    
-                                except Exception as e:
-                                    print(f"Ошибка при озвучивании сообщения: {e}")
-                                    sentry_sdk.capture_exception(e)
-                            
-                            # Переключаем трек
-                            self.current_index = next_index
-                            
+                        # Если успешно переключили и нужно начать воспроизведение
+                        if result and self.playback_info["active"]:
+                            # Небольшая пауза перед началом воспроизведения
+                            time.sleep(0.5)
                             # Начинаем воспроизведение нового трека
-                            if self.debug:
-                                print("Начинаем воспроизведение нового трека")
                             self.play_current_file()
-                            
-                            # Добавляем информацию в Sentry
-                            sentry_sdk.add_breadcrumb(
-                                category='playback',
-                                message=f'Переключение на следующий трек: {next_file_info["description"]}',
-                                level='info'
-                            )
                         
                         return True
                     except Exception as e:
@@ -961,66 +969,21 @@ class PlaybackManager:
                         if self.debug:
                             print("Переключение на предыдущий трек")
                         
-                        # Проверяем, есть ли предыдущий трек
-                        prev_index = (self.current_index - 1) % len(self.files_list)
-                        if prev_index == len(self.files_list) - 1 and self.current_index == 0:
-                            # Мы на первом треке
-                            message = "Достигнуто начало списка воспроизведения"
-                            if self.debug:
-                                print(message)
-                            if self.tts_manager:
-                                self.tts_manager.play_speech_blocking(message)
-                            sentry_sdk.add_breadcrumb(
-                                category='playback',
-                                message='Попытка переключения назад на первом треке',
-                                level='info'
-                            )
-                            return True
-                        
                         # Останавливаем текущее воспроизведение
                         if self.player.is_active():
                             self.player.stop()
+                            # Небольшая пауза после остановки
+                            time.sleep(0.5)
                         
-                        # Получаем информацию о предыдущем треке перед переключением
-                        prev_file_info = self.get_file_info(prev_index)
+                        # Переключаем трек
+                        result = self.move_to_prev_file()
                         
-                        if prev_file_info:
-                            # Озвучиваем переключение и ждем завершения
-                            message = f"Переключаю назад на {prev_file_info['description']}"
-                            if self.tts_manager:
-                                if self.debug:
-                                    print(f"Воспроизведение сообщения: {message}")
-                                try:
-                                    # Останавливаем текущее воспроизведение перед системным сообщением
-                                    if self.player.is_active():
-                                        self.player.stop()
-                                    
-                                    # Используем блокирующий метод для гарантированного завершения системного сообщения
-                                    if self.debug:
-                                        print("Воспроизведение системного сообщения (блокирующий режим)")
-                                    self.tts_manager.play_speech_blocking(message)
-                                    
-                                    # Дополнительная пауза после системного сообщения
-                                    time.sleep(0.5)
-                                    
-                                except Exception as e:
-                                    print(f"Ошибка при озвучивании сообщения: {e}")
-                                    sentry_sdk.capture_exception(e)
-                            
-                            # Переключаем трек
-                            self.current_index = prev_index
-                            
+                        # Если успешно переключили и нужно начать воспроизведение
+                        if result and self.playback_info["active"]:
+                            # Небольшая пауза перед началом воспроизведения
+                            time.sleep(0.5)
                             # Начинаем воспроизведение нового трека
-                            if self.debug:
-                                print("Начинаем воспроизведение нового трека")
                             self.play_current_file()
-                            
-                            # Добавляем информацию в Sentry
-                            sentry_sdk.add_breadcrumb(
-                                category='playback',
-                                message=f'Переключение на предыдущий трек: {prev_file_info["description"]}',
-                                level='info'
-                            )
                         
                         return True
                     except Exception as e:

@@ -10,6 +10,7 @@ import signal
 import pyudev
 from typing import Dict, List, Any, Optional
 import shutil
+import sentry_sdk
 
 # Путь к домашней директории пользователя для логов
 HOME_DIR = os.path.expanduser("~")
@@ -267,6 +268,8 @@ class USBMonitorService:
         """Получение информации об устройстве."""
         try:
             # Получаем информацию о файловой системе, размере и метке устройства
+            # Обратите внимание, что здесь мы получаем только базовую информацию об устройстве
+            # Свободное место будет обновлено в handle_device_added после монтирования
             stdout, stderr, rc = self._run_command(f"lsblk -o NAME,SIZE,LABEL,FSTYPE,MODEL -J {device_path}")
             if rc != 0:
                 logger.error(f"Ошибка получения информации о {device_path}: {stderr}")
@@ -282,7 +285,7 @@ class USBMonitorService:
                     
                     return {
                         'name': device_name,
-                        'size': device_data.get('size', 'Неизвестно'),
+                        'size': device_data.get('size', 'Неизвестно'),  # Будет заменено на свободное место после монтирования
                         'filesystem': device_data.get('fstype', 'Неизвестно'),
                         'device': device_path,
                         'is_connected': True
@@ -293,6 +296,7 @@ class USBMonitorService:
             return None
         except Exception as e:
             logger.error(f"Ошибка при получении информации о {device_path}: {e}")
+            sentry_sdk.capture_exception(e)
             return None
     
     def _is_usb_device(self, device_path: str) -> bool:
@@ -309,16 +313,23 @@ class USBMonitorService:
             return False
     
     def _get_total_space(self, mount_point: str) -> str:
-        """Получение общего размера устройства."""
+        """Получение размера свободного места на устройстве в формате 'Гигабайт: X, Мегабайт: Y'."""
         try:
+            # Получаем информацию о размере диска: общий, использованный и свободный
             total, used, free = shutil.disk_usage(mount_point)
-            # Преобразуем в читабельный формат
-            if total > 1e9:  # Более 1 ГБ
-                return f"{total / 1e9:.1f} GB"
-            else:
-                return f"{total / 1e6:.1f} MB"
+            
+            # Вычисляем количество гигабайт и мегабайт (остаток)
+            gigabytes = int(free // (1024 * 1024 * 1024))
+            megabytes = int((free % (1024 * 1024 * 1024)) // (1024 * 1024))
+            
+            # Формируем строку в новом формате
+            result = f"Гигабайт: {gigabytes}, Мегабайт: {megabytes}"
+            logger.info(f"Свободное место на {mount_point}: {result}")
+            
+            return result
         except Exception as e:
             logger.error(f"Ошибка при получении размера {mount_point}: {e}")
+            sentry_sdk.capture_exception(e)
             return "Неизвестно"
     
     def handle_device_event(self, device):
@@ -363,8 +374,9 @@ class USBMonitorService:
             device_info['mount_point'] = mount_point
             device_info['device'] = device_path  # Обязательно сохраняем путь к устройству
             
-            # Получаем точный размер
+            # Получаем свободное место вместо общего размера
             device_info['size'] = self._get_total_space(mount_point)
+            device_info['free_space'] = device_info['size']  # Сохраняем свободное место под другим ключом для совместимости
             
             # Сохраняем в словаре текущих устройств
             self.devices[device_path] = device_info
@@ -375,6 +387,7 @@ class USBMonitorService:
             logger.info(f"Устройство добавлено: {device_info}")
         except Exception as e:
             logger.error(f"Ошибка при обработке подключения {device_path}: {e}")
+            sentry_sdk.capture_exception(e)
     
     def handle_device_removed(self, device_path: str) -> None:
         """Обработка события отключения устройства."""
@@ -416,11 +429,17 @@ class USBMonitorService:
             # Создаем список подключенных устройств
             usb_devices = []
             for device_info in self.devices.values():
+                # Обновляем свободное место перед сохранением
+                if os.path.exists(device_info.get('mount_point', '')):
+                    device_info['size'] = self._get_total_space(device_info['mount_point'])
+                    device_info['free_space'] = device_info['size']
+                
                 usb_devices.append({
                     'name': device_info['name'],
-                    'size': device_info['size'],
+                    'size': device_info['size'],  # Теперь это свободное место
+                    'free_space': device_info.get('free_space', device_info['size']),
                     'mount_point': device_info['mount_point'],
-                    'filesystem': device_info['filesystem'],
+                    'filesystem': device_info.get('filesystem', 'Неизвестно'),
                     'device': device_info['device'],  # Добавляем device_path в настройки
                     'is_connected': True
                 })
@@ -434,6 +453,7 @@ class USBMonitorService:
             logger.info(f"Настройки обновлены: {len(usb_devices)} устройств")
         except Exception as e:
             logger.error(f"Ошибка при обновлении настроек: {e}")
+            sentry_sdk.capture_exception(e)
     
     def scan_existing_devices(self) -> None:
         """Сканирование существующих USB-устройств при запуске."""
