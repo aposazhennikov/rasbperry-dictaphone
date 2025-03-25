@@ -15,6 +15,7 @@ from .audio_recorder import AudioRecorder
 from .menu_item import MenuItem, SubMenu, Menu
 from .external_storage_menu import ExternalStorageMenu
 from .base_menu import BaseMenu
+from .bulk_delete_manager import BulkDeleteManager
 
 # Настройка логирования
 logger = logging.getLogger("menu_manager")
@@ -70,6 +71,13 @@ class MenuManager:
         self.playback_manager = PlaybackManager(
             tts_manager=self.tts_manager,
             base_dir=self.records_dir,
+            debug=self.debug
+        )
+        
+        # Инициализация менеджера массового удаления
+        self.bulk_delete_manager = BulkDeleteManager(
+            menu_manager=self,
+            records_dir=self.records_dir,
             debug=self.debug
         )
         
@@ -475,6 +483,21 @@ class MenuManager:
         speech_texts.add("Запись успешно удалена")
         speech_texts.add("Ошибка при удалении записи")
         
+        # Добавляем сообщения для массового удаления записей
+        speech_texts.add("Массовое удаление записей")
+        speech_texts.add("Удалить записи из всех папок")
+        speech_texts.add("Вы действительно хотите удалить все записи из папки")
+        speech_texts.add("Вы точно хотите удалить все записи из всех папок")
+        speech_texts.add("Финальное подтверждение удаления всех записей")
+        speech_texts.add("Количество записей")
+        speech_texts.add("В папке нет записей")
+        speech_texts.add("Нет записей во всех папках")
+        speech_texts.add("Ошибка при удалении записей из папки")
+        speech_texts.add("Ошибка при удалении записей из всех папок")
+        speech_texts.add("запись")
+        speech_texts.add("записи")
+        speech_texts.add("записей")
+        
         # Добавляем сообщения для внешнего носителя
         speech_texts.add("Недостаточно места на флешке")
         speech_texts.add("Копирование успешно завершено")
@@ -539,144 +562,6 @@ class MenuManager:
         
         # Предварительно генерируем все звуки для всех голосов
         self.tts_manager.pre_generate_menu_items(speech_texts, voices=voices)
-    
-    def pre_generate_missing_speech(self, voices=None):
-        """
-        Предварительно генерирует только отсутствующие звуки для меню
-        
-        Args:
-            voices (list, optional): Список голосов для предварительной генерации
-        """
-        if not self.tts_enabled or not self.root_menu:
-            return
-        
-        # Если голоса не указаны, используем все доступные голоса
-        if voices is None:
-            voices = list(self.settings_manager.get_available_voices().keys())
-        
-        # Собираем все тексты для озвучки
-        speech_texts = set()
-        
-        def collect_speech_texts(menu):
-            # Добавляем только тексты пунктов меню, не озвучиваем название самого меню
-            for item in menu.items:
-                speech_texts.add(item.get_speech_text())
-                if isinstance(item, SubMenu):
-                    collect_speech_texts(item)
-        
-        # Начинаем с корневого меню
-        collect_speech_texts(self.root_menu)
-        
-        # Добавляем системные сообщения для возврата
-        speech_texts.add("Возврат в")
-        speech_texts.add("главное меню")
-        speech_texts.add("предыдущее меню")
-        speech_texts.add("Голос успешно изменен")
-        
-        # Добавляем сообщения для диктофона
-        speech_texts.add("Запись началась")
-        speech_texts.add("Запись приостановлена")
-        speech_texts.add("Запись возобновлена")
-        speech_texts.add("Запись остановлена")
-        speech_texts.add("Запись сохранена в папку")  # Первая часть сообщения
-        speech_texts.add("Запись отменена")
-        speech_texts.add("Выберите папку для записи")
-        speech_texts.add("Папка A")
-        speech_texts.add("Папка B")
-        speech_texts.add("Папка C")
-        
-        # Добавляем сообщения для информации о файлах в папках
-        speech_texts.add("В папке")  # Первая часть сообщения
-        speech_texts.add("нет записей")  # Третья часть сообщения
-        
-        # Добавляем слова для формирования сообщений о количестве файлов
-        for count in range(0, 100):  # Поддержка до 99 файлов
-            speech_texts.add(str(count))
-        speech_texts.add("файл")
-        speech_texts.add("файла")
-        speech_texts.add("файлов")
-        
-        # Добавляем слово "Папка" для навигации по файлам на флешке
-        speech_texts.add("Папка")
-        
-        # Добавляем сообщения для воспроизведения
-        speech_texts.add("Воспроизведение")
-        speech_texts.add("Пауза")
-        speech_texts.add("Прослушано")
-        speech_texts.add("Переключаю вперед на запись")
-        speech_texts.add("Переключаю назад на запись")
-        speech_texts.add("Ошибка при переключении трека")
-        speech_texts.add("Запись успешно удалена")
-        speech_texts.add("Ошибка при удалении записи")
-        
-        # Добавляем сообщения для удаления файлов
-        speech_texts.add("Вы точно хотите удалить эту запись")
-        speech_texts.add("Запись успешно удалена")
-        
-        # Добавляем сообщения для внешнего носителя
-        speech_texts.add("Недостаточно места на флешке")
-        speech_texts.add("Копирование успешно завершено")
-        speech_texts.add("Возврат в режим внешнего носителя")
-        speech_texts.add("Произошла ошибка при копировании файлов")
-        speech_texts.add("Флешка была отключена")
-        speech_texts.add("Директория с записями не найдена")
-        speech_texts.add("Скопировать все аудиозаписи из всех папок")
-        speech_texts.add("Скопировать все аудиозаписи из папки")
-        
-        # Добавляем сообщения для настроек громкости (теперь отдельно)
-        speech_texts.add("Установлен уровень громкости")
-        speech_texts.add("Уровень громкости")
-        speech_texts.add("Сейчас установлен уровень громкости")
-        
-        # Добавляем числовые значения для уровней громкости
-        for level in range(0, 7):
-            speech_texts.add(f"{level}")
-        
-        # Попытка добавить имена записей диктофона из папок A, B, C
-        try:
-            # Путь к папке с записями
-            records_dir = self.records_dir
-            if os.path.exists(records_dir):
-                # Папки для диктофона
-                folders = ["A", "B", "C"]
-                for folder in folders:
-                    folder_path = os.path.join(records_dir, folder)
-                    if os.path.exists(folder_path):
-                        # Получаем список файлов в папке
-                        files = [f for f in os.listdir(folder_path) if f.endswith(('.wav', '.mp3'))]
-                        for file in files:
-                            file_path = os.path.join(folder_path, file)
-                            # Получаем человекочитаемое название файла
-                            if hasattr(self, 'playback_manager') and self.playback_manager:
-                                readable_name = self.playback_manager.get_human_readable_filename(file_path)
-                                speech_texts.add(readable_name)
-        except Exception as e:
-            print(f"Ошибка при получении имен файлов из папок диктофона: {e}")
-            sentry_sdk.capture_exception(e)
-        
-        # Попытка добавить имена файлов с подключенного внешнего носителя
-        try:
-            # Проверяем подключенные USB-устройства
-            if hasattr(self, 'external_storage_menu') and self.external_storage_menu:
-                mounted_devices = self.external_storage_menu.get_mounted_devices()
-                for device_info in mounted_devices:
-                    mount_point = device_info.get('mount_point')
-                    if mount_point and os.path.exists(mount_point):
-                        # Получаем список аудиофайлов на флешке
-                        for root, dirs, files in os.walk(mount_point):
-                            for file in files:
-                                if file.endswith(('.wav', '.mp3')):
-                                    file_path = os.path.join(root, file)
-                                    # Получаем человекочитаемое название файла
-                                    if hasattr(self, 'playback_manager') and self.playback_manager:
-                                        readable_name = self.playback_manager.get_human_readable_filename(file_path)
-                                        speech_texts.add(readable_name)
-        except Exception as e:
-            print(f"Ошибка при получении имен файлов с внешнего носителя: {e}")
-            sentry_sdk.capture_exception(e)
-        
-        # Предварительно генерируем только отсутствующие звуки для всех голосов
-        self.tts_manager.pre_generate_missing_menu_items(speech_texts, voices=voices)
     
     def change_voice(self, voice_id):
         """
@@ -909,7 +794,7 @@ class MenuManager:
         # Добавляем подменю для диктофона
         dictaphone_menu.add_item(MenuItem("Создать новую запись", lambda: self._show_folder_selection_menu()))
         dictaphone_menu.add_item(MenuItem("Воспроизвести запись", lambda: self._show_play_record_menu()))
-        dictaphone_menu.add_item(MenuItem("Удалить запись", lambda: self._show_delete_record_menu()))
+        dictaphone_menu.add_item(MenuItem("Массовое удаление записей", lambda: self._show_delete_record_menu()))
         
         # Добавляем подменю для режима звонка
         call_menu = SubMenu("Режим звонка", parent=main_menu)
@@ -1383,8 +1268,14 @@ class MenuManager:
             sentry_sdk.capture_exception(e)
     
     def _show_delete_record_menu(self):
-        # Implementation of _show_delete_record_menu method
-        pass
+        """Показывает меню массового удаления записей"""
+        try:
+            # Используем BulkDeleteManager для отображения меню удаления
+            self.bulk_delete_manager.show_delete_menu()
+        except Exception as e:
+            error_msg = f"Ошибка при отображении меню удаления: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
 
     def _update_playback_info(self):
         """Обновляет информацию о текущем воспроизведении"""
@@ -2741,3 +2632,136 @@ class MenuManager:
             error_msg = f"Ошибка при озвучивании пункта меню: {e}"
             print(error_msg)
             sentry_sdk.capture_exception(e)
+
+    def pre_generate_missing_speech(self, voices=None):
+        """
+        Предварительно генерирует только отсутствующие звуки для меню
+        
+        Args:
+            voices (list, optional): Список голосов для предварительной генерации
+        """
+        if not self.tts_enabled or not self.root_menu:
+            return
+        
+        # Если голоса не указаны, используем все доступные голоса
+        if voices is None:
+            voices = list(self.settings_manager.get_available_voices().keys())
+        
+        # Собираем все тексты для озвучки
+        speech_texts = set()
+        
+        def collect_speech_texts(menu):
+            # Добавляем только тексты пунктов меню, не озвучиваем название самого меню
+            for item in menu.items:
+                speech_texts.add(item.get_speech_text())
+                if isinstance(item, SubMenu):
+                    collect_speech_texts(item)
+        
+        # Начинаем с корневого меню
+        collect_speech_texts(self.root_menu)
+        
+        # Добавляем системные сообщения для возврата
+        speech_texts.add("Возврат в")
+        speech_texts.add("главное меню")
+        speech_texts.add("предыдущее меню")
+        speech_texts.add("Голос успешно изменен")
+        
+        # Добавляем сообщения для диктофона
+        speech_texts.add("Запись началась")
+        speech_texts.add("Запись приостановлена")
+        speech_texts.add("Запись возобновлена")
+        speech_texts.add("Запись остановлена")
+        speech_texts.add("Запись сохранена в папку")  # Первая часть сообщения
+        speech_texts.add("Запись отменена")
+        speech_texts.add("Выберите папку для записи")
+        speech_texts.add("Папка A")
+        speech_texts.add("Папка B")
+        speech_texts.add("Папка C")
+        
+        # Добавляем сообщения для массового удаления записей
+        speech_texts.add("Массовое удаление записей")
+        speech_texts.add("Удалить записи из всех папок")
+        speech_texts.add("Вы действительно хотите удалить все записи из папки")
+        speech_texts.add("Вы точно хотите удалить все записи из всех папок")
+        speech_texts.add("Финальное подтверждение удаления всех записей")
+        speech_texts.add("Количество записей")
+        speech_texts.add("В папке нет записей")
+        speech_texts.add("Нет записей во всех папках")
+        speech_texts.add("Ошибка при удалении записей из папки")
+        speech_texts.add("Ошибка при удалении записей из всех папок")
+        speech_texts.add("запись")
+        speech_texts.add("записи")
+        speech_texts.add("записей")
+        
+        # Добавляем сообщения для информации о файлах в папках
+        speech_texts.add("В папке")  # Первая часть сообщения
+        speech_texts.add("нет записей")  # Третья часть сообщения
+        
+        # Добавляем слова для формирования сообщений о количестве файлов
+        for count in range(0, 100):  # Поддержка до 99 файлов
+            speech_texts.add(str(count))
+        speech_texts.add("файл")
+        speech_texts.add("файла")
+        speech_texts.add("файлов")
+        
+        # Добавляем слово "Папка" для навигации по файлам на флешке
+        speech_texts.add("Папка")
+        
+        # Добавляем сообщения для воспроизведения
+        speech_texts.add("Воспроизведение")
+        speech_texts.add("Пауза")
+        speech_texts.add("Прослушано")
+        speech_texts.add("Переключаю вперед на запись")
+        speech_texts.add("Переключаю назад на запись")
+        speech_texts.add("Ошибка при переключении трека")
+        speech_texts.add("Запись успешно удалена")
+        speech_texts.add("Ошибка при удалении записи")
+        
+        # Добавляем сообщения для удаления файлов
+        speech_texts.add("Вы точно хотите удалить эту запись")
+        speech_texts.add("Запись успешно удалена")
+        speech_texts.add("Ошибка при удалении записи")
+        
+        # Добавляем сообщения для внешнего носителя
+        speech_texts.add("Недостаточно места на флешке")
+        speech_texts.add("Копирование успешно завершено")
+        speech_texts.add("Возврат в режим внешнего носителя")
+        speech_texts.add("Произошла ошибка при копировании файлов")
+        speech_texts.add("Флешка была отключена")
+        speech_texts.add("Директория с записями не найдена")
+        speech_texts.add("Скопировать все аудиозаписи из всех папок")
+        speech_texts.add("Скопировать все аудиозаписи из папки")
+        
+        # Добавляем сообщения для настроек громкости (теперь отдельно)
+        speech_texts.add("Установлен уровень громкости")
+        speech_texts.add("Уровень громкости")
+        speech_texts.add("Сейчас установлен уровень громкости")
+        
+        # Добавляем числовые значения для уровней громкости
+        for level in range(0, 7):
+            speech_texts.add(f"{level}")
+        
+        # Попытка добавить имена записей диктофона из папок A, B, C
+        try:
+            # Путь к папке с записями
+            records_dir = self.records_dir
+            if os.path.exists(records_dir):
+                # Папки для диктофона
+                folders = ["A", "B", "C"]
+                for folder in folders:
+                    folder_path = os.path.join(records_dir, folder)
+                    if os.path.exists(folder_path):
+                        # Получаем список файлов в папке
+                        files = [f for f in os.listdir(folder_path) if f.endswith(('.wav', '.mp3'))]
+                        for file in files:
+                            file_path = os.path.join(folder_path, file)
+                            # Получаем человекочитаемое название файла
+                            if hasattr(self, 'playback_manager') and self.playback_manager:
+                                readable_name = self.playback_manager.get_human_readable_filename(file_path)
+                                speech_texts.add(readable_name)
+        except Exception as e:
+            print(f"Ошибка при получении имен файлов из папок диктофона: {e}")
+            sentry_sdk.capture_exception(e)
+        
+        # Предварительно генерируем только отсутствующие звуки для всех голосов
+        self.tts_manager.pre_generate_missing_menu_items(speech_texts, voices=voices)
