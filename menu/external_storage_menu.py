@@ -22,6 +22,7 @@ sentry_sdk.init(
 )
 
 from menu.base_menu import BaseMenu
+from menu.menu_item import MenuItem, SubMenu
 
 # Настройка логирования
 logging.basicConfig(
@@ -32,6 +33,29 @@ logger = logging.getLogger(__name__)
 
 # Путь к файлу настроек
 SETTINGS_FILE = "/home/aleks/cache_tts/settings.json"
+
+class FolderMenuItem(MenuItem):
+    """Класс для представления пунктов меню папок"""
+    
+    def __init__(self, name, folder_name, action):
+        """
+        Инициализирует пункт меню папки
+        
+        Args:
+            name (str): Отображаемое имя пункта меню
+            folder_name (str): Исходное имя папки для озвучивания
+            action (callable): Функция, вызываемая при выборе пункта
+        """
+        super().__init__(name, action)
+        self.folder_name = folder_name
+    
+    def get_speech_text(self):
+        """Возвращает имя папки для озвучивания"""
+        return self.folder_name
+    
+    def is_folder(self):
+        """Метод для идентификации, что это папка"""
+        return True
 
 class ExternalStorageMenu(BaseMenu):
     """Меню для работы с внешними носителями на основе данных из settings.json."""
@@ -221,6 +245,48 @@ class ExternalStorageMenu(BaseMenu):
     AUDIO_EXTENSIONS = {'.mp3', '.wav', '.ogg', '.m4a', '.wma', '.aac', '.flac', '.alac', '.opus', '.aiff'}
     TEXT_EXTENSIONS = {'.txt', '.epub', '.fb2', '.pdf', '.doc', '.docx'}
     
+    def create_folder_action(self, path):
+        """
+        Создает функцию действия для папки
+        
+        Args:
+            path (str): Путь к папке
+            
+        Returns:
+            callable: Функция действия
+        """
+        def action():
+            return self._list_files(path)
+        return action
+
+    def create_audio_action(self, path):
+        """
+        Создает функцию действия для аудиофайла
+        
+        Args:
+            path (str): Путь к аудиофайлу
+            
+        Returns:
+            callable: Функция действия
+        """
+        def action():
+            return self._play_audio_file(path)
+        return action
+
+    def create_text_action(self, path):
+        """
+        Создает функцию действия для текстового файла
+        
+        Args:
+            path (str): Путь к текстовому файлу
+            
+        Returns:
+            callable: Функция действия
+        """
+        def action():
+            return self._view_text_file(path)
+        return action
+
     def _list_files(self, mount_point: str):
         """
         Создает и возвращает подменю для навигации по файлам на флешке.
@@ -271,10 +337,17 @@ class ExternalStorageMenu(BaseMenu):
             # Добавляем папки
             for dir_name in sorted(dirs):
                 dir_path = os.path.join(mount_point, dir_name)
-                dir_item = MenuItem(
-                    name=dir_name,
-                    speech_text=dir_name,
-                    action=lambda path=dir_path: self._list_files(path)
+                # Для отображения используем полное имя с префиксом "Папка"
+                display_name = f"Папка {dir_name}"
+                
+                # Создаем функцию действия для этой папки
+                folder_action = self.create_folder_action(dir_path)
+                
+                # Создаем пункт меню для папки
+                dir_item = FolderMenuItem(
+                    name=display_name,
+                    folder_name=dir_name,
+                    action=folder_action
                 )
                 files_menu.add_item(dir_item)
                 
@@ -286,16 +359,20 @@ class ExternalStorageMenu(BaseMenu):
                 # Используем разные действия в зависимости от типа файла
                 if ext in self.AUDIO_EXTENSIONS:
                     # Для аудио файлов используем существующий плеер
+                    audio_action = self.create_audio_action(file_path)
+                    
                     file_item = MenuItem(
                         name=file_name,
                         speech_text=file_name,
-                        action=lambda path=file_path: self._play_audio_file(path)
+                        action=audio_action
                     )
                 else:  # Текстовые файлы
+                    text_action = self.create_text_action(file_path)
+                    
                     file_item = MenuItem(
                         name=file_name,
                         speech_text=file_name,
-                        action=lambda path=file_path: self._view_text_file(path)
+                        action=text_action
                     )
                 files_menu.add_item(file_item)
             
@@ -320,7 +397,7 @@ class ExternalStorageMenu(BaseMenu):
                     parent_menu = self.current_menu if hasattr(self, 'current_menu') else self
                 else:
                     # Создаем действие для возврата в родительскую папку
-                    parent_menu_action = lambda: self._list_files(parent_dir)
+                    parent_menu_action = self.create_folder_action(parent_dir)
                     
                     # Если self.menu_manager существует, выполняем родительское меню
                     if hasattr(self, 'menu_manager') and self.menu_manager:
@@ -572,7 +649,7 @@ class ExternalStorageMenu(BaseMenu):
             # Добавляем пункт для копирования всех записей
             copy_all_item = MenuItem(
                 name=f"Скопировать все аудиозаписи из всех папок ({self._format_size(all_files_size)})",
-                speech_text=f"Скопировать все аудиозаписи из всех папок. Общий размер {self._format_size(all_files_size)}",
+                speech_text=f"Скопировать все аудиозаписи из всех папок",
                 action=lambda: self._perform_copy_operation(records_dir, mount_point, all_files_size, free_space, copy_all=True)
             )
             copy_menu.add_item(copy_all_item)
@@ -583,7 +660,7 @@ class ExternalStorageMenu(BaseMenu):
                 if os.path.exists(folder_path) and folder_sizes.get(folder, 0) > 0:
                     folder_item = MenuItem(
                         name=f"Скопировать все аудиозаписи из папки {folder} ({self._format_size(folder_sizes[folder])})",
-                        speech_text=f"Скопировать все аудиозаписи из папки {folder}. Размер {self._format_size(folder_sizes[folder])}",
+                        speech_text=f"Скопировать все аудиозаписи из папки {folder}",
                         action=lambda f=folder, s=folder_sizes[folder]: self._perform_copy_operation(
                             os.path.join(records_dir, f), 
                             mount_point, 
@@ -876,8 +953,11 @@ class ExternalStorageMenu(BaseMenu):
         try:
             from menu.menu_item import MenuItem, SubMenu
             
+            # Используем только название устройства без размера для речевого текста
+            device_title = device_info.get('title', 'USB-накопитель')
+            device_name = device_title.split(' (')[0] if ' (' in device_title else device_title
+            
             # Создаем подменю для выбранного устройства
-            device_name = device_info.get('title', 'USB-накопитель')
             device_menu = SubMenu(name=device_name)
             
             # Добавляем пункты в подменю устройства
@@ -892,8 +972,6 @@ class ExternalStorageMenu(BaseMenu):
                 speech_text="Скопировать файлы на флешку",
                 action=lambda: self._copy_files_to_usb(device_info['mount_point'], device_info.get('filesystem', 'Неизвестно'))
             ))
-            
-            # Убираем пункт "Назад", так как используется кнопка KEY_BACK
             
             # Устанавливаем родительское меню
             device_menu.parent = self
@@ -1155,3 +1233,29 @@ class ExternalStorageMenu(BaseMenu):
             logger.error(f"Ошибка при обработке выбора пункта меню: {e}")
             sentry_sdk.capture_exception(e)
             return None
+
+    def count_files_in_usb_folder(self, folder_path):
+        """
+        Подсчитывает количество аудиофайлов в указанной папке на USB-накопителе
+        
+        Args:
+            folder_path (str): Полный путь к папке на USB-накопителе
+            
+        Returns:
+            int: Количество аудиофайлов в папке
+        """
+        try:
+            if not os.path.exists(folder_path) or not os.path.isdir(folder_path):
+                logger.warning(f"Папка не существует или не является директорией: {folder_path}")
+                return 0
+                
+            # Получаем список аудиофайлов
+            audio_files = []
+            for ext in self.AUDIO_EXTENSIONS:
+                audio_files.extend(glob.glob(os.path.join(folder_path, f"*{ext}")))
+            
+            return len(audio_files)
+        except Exception as e:
+            logger.error(f"Ошибка при подсчете файлов в папке на USB: {e}")
+            sentry_sdk.capture_exception(e)
+            return 0

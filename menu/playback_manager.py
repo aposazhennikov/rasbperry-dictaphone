@@ -384,17 +384,18 @@ class PlaybackManager:
         # Обновляем информацию о файле
         file_info = self.get_current_file_info()
         if file_info:
-            # Озвучиваем переключение с полной фразой
-            message = f"Переключаю вперед на {file_info['description']}"
-            if self.tts_manager:
-                try:
-                    # Используем блокирующий режим для гарантированного окончания сообщения
-                    self.tts_manager.play_speech_blocking(message)
+            try:
+                if self.tts_manager:
+                    # Сначала озвучиваем статичное сообщение
+                    self.tts_manager.play_speech_blocking("Переключаю вперед на запись")
+                    time.sleep(0.1)  # Небольшая пауза между сообщениями
+                    # Затем озвучиваем название записи отдельно
+                    self.tts_manager.play_speech_blocking(file_info['description'])
                     # Дополнительная пауза после сообщения
                     time.sleep(0.5)
-                except Exception as e:
-                    print(f"Ошибка при озвучивании переключения: {e}")
-                    sentry_sdk.capture_exception(e)
+            except Exception as e:
+                print(f"Ошибка при озвучивании переключения: {e}")
+                sentry_sdk.capture_exception(e)
             
             # Обновляем интерфейс
             if self.update_callback:
@@ -426,17 +427,18 @@ class PlaybackManager:
         # Обновляем информацию о файле
         file_info = self.get_current_file_info()
         if file_info:
-            # Озвучиваем переключение с полной фразой
-            message = f"Переключаю назад на {file_info['description']}"
-            if self.tts_manager:
-                try:
-                    # Используем блокирующий режим для гарантированного окончания сообщения
-                    self.tts_manager.play_speech_blocking(message)
+            try:
+                if self.tts_manager:
+                    # Сначала озвучиваем статичное сообщение
+                    self.tts_manager.play_speech_blocking("Переключаю назад на запись")
+                    time.sleep(0.1)  # Небольшая пауза между сообщениями
+                    # Затем озвучиваем название записи отдельно
+                    self.tts_manager.play_speech_blocking(file_info['description'])
                     # Дополнительная пауза после сообщения
                     time.sleep(0.5)
-                except Exception as e:
-                    print(f"Ошибка при озвучивании переключения: {e}")
-                    sentry_sdk.capture_exception(e)
+            except Exception as e:
+                print(f"Ошибка при озвучивании переключения: {e}")
+                sentry_sdk.capture_exception(e)
             
             # Обновляем интерфейс
             if self.update_callback:
@@ -1128,16 +1130,15 @@ class PlaybackManager:
             voice_id = "ru-RU-Standard-D"
             
             # Озвучиваем запрос на подтверждение
-            message = f"Вы точно хотите удалить эту запись?"
             if self.debug:
-                print(f"Запрос подтверждения: {message}")
+                print(f"Запрос подтверждения удаления")
                 
             if self.tts_manager:
                 try:
                     if hasattr(self.tts_manager, 'play_speech_blocking'):
-                        self.tts_manager.play_speech_blocking(message, voice_id=voice_id)
+                        self.tts_manager.play_speech_blocking("Вы точно хотите удалить эту запись", voice_id=voice_id)
                     else:
-                        self.tts_manager.play_speech(message, voice_id=voice_id)
+                        self.tts_manager.play_speech("Вы точно хотите удалить эту запись", voice_id=voice_id)
                         time.sleep(1.5)
                 except Exception as e:
                     print(f"Ошибка при озвучивании запроса на удаление: {e}")
@@ -1229,6 +1230,9 @@ class PlaybackManager:
             # Получаем путь к файлу
             file_path = self.files_list[self.current_index]
             
+            # Проверяем, находится ли файл на внешнем накопителе (USB флешке)
+            is_external_storage = '/media/' in file_path or '/mnt/' in file_path
+            
             # Останавливаем воспроизведение, если оно активно
             if self.player.is_active():
                 self.player.stop()
@@ -1253,11 +1257,24 @@ class PlaybackManager:
                 
                 # Озвучиваем результат
                 voice_id = "ru-RU-Standard-D"
-                self.tts_manager.play_speech("Запись удалена", voice_id=voice_id)
+                # Используем блокирующий вызов и добавляем паузу, чтобы сообщение гарантированно прозвучало
+                if hasattr(self.tts_manager, 'play_speech_blocking'):
+                    self.tts_manager.play_speech_blocking("Запись успешно удалена", voice_id=voice_id)
+                else:
+                    self.tts_manager.play_speech("Запись успешно удалена", voice_id=voice_id)
+                    time.sleep(1.5)  # Достаточная пауза для воспроизведения сообщения
+
+                # Добавляем задержку перед возвратом в меню
+                time.sleep(0.5)
                 
                 # Обновляем интерфейс
                 if self.update_callback:
                     self.update_callback()
+                
+                # Если файл был на внешнем накопителе, возвращаем True, но с указанием, 
+                # что это был файл с флешки (для обработки в menu_manager)
+                if is_external_storage:
+                    return "usb_deleted"
                 
                 return True
             except Exception as file_e:

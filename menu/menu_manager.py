@@ -123,45 +123,33 @@ class MenuManager:
         self.current_menu = menu
     
     def display_current_menu(self):
-        """Отображает текущее меню"""
+        """Отображает текущее меню и озвучивает его название"""
         try:
             if not self.current_menu:
-                if self.debug:
-                    print("Ошибка: нет текущего меню для отображения")
                 return
                 
-            # Безопасно получаем имя меню
-            menu_name = getattr(self.current_menu, 'name', str(self.current_menu))
+            # Получаем человеко-читаемое имя меню
+            menu_name = self.current_menu.name
             
+            # Отладочная информация
             if self.debug:
                 print(f"\n--- ОТОБРАЖЕНИЕ МЕНЮ: {menu_name} ---")
-                print(f"Текущее меню содержит {len(self.current_menu.items)} пунктов")
+                print(f"Количество пунктов: {len(self.current_menu.items)}")
+                print(f"Текущий выбранный пункт: {self.current_menu.current_selection}")
                 
-            # Отображаем меню на экране, если есть дисплей
+            # Обновляем отображение меню
             if self.display_manager:
                 try:
                     self.display_manager.display_menu(self.current_menu)
-                except Exception as e:
-                    error_msg = f"Ошибка при отображении меню: {e}"
-                    print(error_msg)
-                    sentry_sdk.capture_exception(e)
+                except Exception as display_error:
+                    print(f"Ошибка при обновлении дисплея: {display_error}")
+                    sentry_sdk.capture_exception(display_error)
             
-            # Озвучиваем текущий пункт меню, если включена озвучка
-            if self.tts_enabled:
-                current_item = self.current_menu.get_current_item()
-                if current_item:
-                    try:
-                        # Получаем текущий голос из настроек
-                        voice = self.settings_manager.get_voice()
-                        item_tts_text = current_item.get_tts_text()
-                        print(f"Озвучиваем новый пункт: {item_tts_text}, голос: {voice}")
-                        self.tts_manager.play_speech(item_tts_text, voice_id=voice)
-                    except Exception as e:
-                        error_msg = f"Ошибка при озвучке пункта меню: {e}"
-                        print(error_msg)
-                        sentry_sdk.capture_exception(e)
+            # Больше не озвучиваем название меню при входе в него
+            # Сразу переходим к озвучиванию текущего пункта меню
+            self.announce_current_menu_item()
         except Exception as e:
-            error_msg = f"Критическая ошибка при отображении меню: {e}"
+            error_msg = f"Ошибка при отображении меню: {e}"
             print(error_msg)
             sentry_sdk.capture_exception(e)
     
@@ -197,28 +185,9 @@ class MenuManager:
                         print(f"Ошибка при обновлении дисплея: {display_error}")
                         sentry_sdk.capture_exception(display_error)
                 
-                # Озвучиваем новый пункт
-                if self.tts_enabled and new_index >= 0 and new_index < len(self.current_menu.items):
-                    try:
-                        current_item = self.current_menu.items[new_index]
-                        
-                        # Пытаемся получить специальный голос для пункта меню
-                        voice_id = self._get_voice_id_for_menu_item(current_item.name)
-                        if self.debug:
-                            print(f"Озвучиваем новый пункт: {current_item.name}, голос: {voice_id}")
-                            
-                        self.tts_manager.play_speech(current_item.get_speech_text(), voice_id=voice_id)
-                    except Exception as tts_error:
-                        print(f"Ошибка при озвучивании пункта меню: {tts_error}")
-                        sentry_sdk.capture_exception(tts_error)
-                        
-                        # Пробуем запасной вариант с обычным голосом
-                        try:
-                            voice = self.tts_manager.voice
-                            self.tts_manager.play_speech(current_item.get_speech_text(), voice_id=voice)
-                        except:
-                            # Если и это не сработало, пропускаем
-                            pass
+                # Озвучиваем новый пункт используя announce_current_menu_item
+                if self.tts_enabled:
+                    self.announce_current_menu_item()
                 
                 return True
             else:
@@ -263,28 +232,9 @@ class MenuManager:
                         print(f"Ошибка при обновлении дисплея: {display_error}")
                         sentry_sdk.capture_exception(display_error)
                 
-                # Озвучиваем новый пункт
-                if self.tts_enabled and new_index >= 0 and new_index < len(self.current_menu.items):
-                    try:
-                        current_item = self.current_menu.items[new_index]
-                        
-                        # Пытаемся получить специальный голос для пункта меню
-                        voice_id = self._get_voice_id_for_menu_item(current_item.name)
-                        if self.debug:
-                            print(f"Озвучиваем новый пункт: {current_item.name}, голос: {voice_id}")
-                            
-                        self.tts_manager.play_speech(current_item.get_speech_text(), voice_id=voice_id)
-                    except Exception as tts_error:
-                        print(f"Ошибка при озвучивании пункта меню: {tts_error}")
-                        sentry_sdk.capture_exception(tts_error)
-                        
-                        # Пробуем запасной вариант с обычным голосом
-                        try:
-                            voice = self.tts_manager.voice
-                            self.tts_manager.play_speech(current_item.get_speech_text(), voice_id=voice)
-                        except:
-                            # Если и это не сработало, пропускаем
-                            pass
+                # Озвучиваем новый пункт используя announce_current_menu_item
+                if self.tts_enabled:
+                    self.announce_current_menu_item()
                 
                 return True
             else:
@@ -429,10 +379,14 @@ class MenuManager:
                 if hasattr(self.current_menu, 'parent') and self.current_menu.parent:
                     logger.info("Подготовка к возврату в родительское меню")
                     parent_name = getattr(self.current_menu.parent, 'name', "предыдущее меню")
-                    self.tts_manager.play_speech(f"Возврат в {parent_name}", voice_id=self.settings_manager.get_voice())
+                    self.tts_manager.play_speech("Возврат в", voice_id=self.settings_manager.get_voice())
+                    time.sleep(0.1)  # Небольшая пауза между сообщениями
+                    self.tts_manager.play_speech(parent_name, voice_id=self.settings_manager.get_voice())
                 else:
                     logger.info("Подготовка к возврату в главное меню")
-                    self.tts_manager.play_speech("Возврат в главное меню", voice_id=self.settings_manager.get_voice())
+                    self.tts_manager.play_speech("Возврат в", voice_id=self.settings_manager.get_voice())
+                    time.sleep(0.1)  # Небольшая пауза между сообщениями
+                    self.tts_manager.play_speech("главное меню", voice_id=self.settings_manager.get_voice())
                     
                 # Выполняем возврат
                 self.go_back()
@@ -465,11 +419,7 @@ class MenuManager:
         speech_texts = set()
         
         def collect_speech_texts(menu):
-            # Добавляем название меню
-            speech_texts.add(menu.get_speech_text())
-            speech_texts.add(f"Меню {menu.name}")
-            
-            # Добавляем все пункты меню
+            # Добавляем только тексты пунктов меню, не озвучиваем название самого меню
             for item in menu.items:
                 speech_texts.add(item.get_speech_text())
                 if isinstance(item, SubMenu):
@@ -478,9 +428,114 @@ class MenuManager:
         # Начинаем с корневого меню
         collect_speech_texts(self.root_menu)
         
-        # Добавляем системные сообщения
-        speech_texts.add("Возврат в главное меню")
+        # Добавляем системные сообщения для возврата
+        speech_texts.add("Возврат в")
+        speech_texts.add("главное меню")
+        speech_texts.add("предыдущее меню")
         speech_texts.add("Голос успешно изменен")
+        
+        # Добавляем сообщения для диктофона
+        speech_texts.add("Запись началась")
+        speech_texts.add("Запись приостановлена")
+        speech_texts.add("Запись возобновлена")
+        speech_texts.add("Запись остановлена")
+        speech_texts.add("Запись сохранена в папку")  # Первая часть сообщения
+        speech_texts.add("Запись отменена")
+        speech_texts.add("Выберите папку для записи")
+        speech_texts.add("Папка A")
+        speech_texts.add("Папка B")
+        speech_texts.add("Папка C")
+        
+        # Добавляем сообщения для информации о файлах в папках
+        speech_texts.add("В папке")  # Первая часть сообщения
+        speech_texts.add("нет записей")  # Третья часть сообщения
+        
+        # Добавляем слова для формирования сообщений о количестве файлов
+        for count in range(0, 100):  # Поддержка до 99 файлов
+            speech_texts.add(str(count))
+        speech_texts.add("файл")
+        speech_texts.add("файла")
+        speech_texts.add("файлов")
+        
+        # Добавляем слово "Папка" для навигации по файлам на флешке
+        speech_texts.add("Папка")
+        
+        # Добавляем сообщения для воспроизведения
+        speech_texts.add("Воспроизведение")
+        speech_texts.add("Пауза")
+        speech_texts.add("Прослушано")
+        speech_texts.add("Переключаю вперед на запись")
+        speech_texts.add("Переключаю назад на запись")
+        speech_texts.add("Ошибка при переключении трека")
+        speech_texts.add("Запись успешно удалена")
+        speech_texts.add("Ошибка при удалении записи")
+        
+        # Добавляем сообщения для удаления файлов
+        speech_texts.add("Вы точно хотите удалить эту запись")
+        speech_texts.add("Запись успешно удалена")
+        speech_texts.add("Ошибка при удалении записи")
+        
+        # Добавляем сообщения для внешнего носителя
+        speech_texts.add("Недостаточно места на флешке")
+        speech_texts.add("Копирование успешно завершено")
+        speech_texts.add("Возврат в режим внешнего носителя")
+        speech_texts.add("Произошла ошибка при копировании файлов")
+        speech_texts.add("Флешка была отключена")
+        speech_texts.add("Директория с записями не найдена")
+        speech_texts.add("Скопировать все аудиозаписи из всех папок")
+        speech_texts.add("Скопировать все аудиозаписи из папки")
+        
+        # Добавляем сообщения для настроек громкости (теперь отдельно)
+        speech_texts.add("Установлен уровень громкости")
+        speech_texts.add("Уровень громкости")
+        speech_texts.add("Сейчас установлен уровень громкости")
+        
+        # Добавляем числовые значения для уровней громкости
+        for level in range(0, 7):
+            speech_texts.add(f"{level}")
+        
+        # Попытка добавить имена записей диктофона из папок A, B, C
+        try:
+            # Путь к папке с записями
+            records_dir = self.records_dir
+            if os.path.exists(records_dir):
+                # Папки для диктофона
+                folders = ["A", "B", "C"]
+                for folder in folders:
+                    folder_path = os.path.join(records_dir, folder)
+                    if os.path.exists(folder_path):
+                        # Получаем список файлов в папке
+                        files = [f for f in os.listdir(folder_path) if f.endswith(('.wav', '.mp3'))]
+                        for file in files:
+                            file_path = os.path.join(folder_path, file)
+                            # Получаем человекочитаемое название файла
+                            if hasattr(self, 'playback_manager') and self.playback_manager:
+                                readable_name = self.playback_manager.get_human_readable_filename(file_path)
+                                speech_texts.add(readable_name)
+        except Exception as e:
+            print(f"Ошибка при получении имен файлов из папок диктофона: {e}")
+            sentry_sdk.capture_exception(e)
+        
+        # Попытка добавить имена файлов с подключенного внешнего носителя
+        try:
+            # Проверяем подключенные USB-устройства
+            if hasattr(self, 'external_storage_menu') and self.external_storage_menu:
+                mounted_devices = self.external_storage_menu.get_mounted_devices()
+                for device_info in mounted_devices:
+                    mount_point = device_info.get('mount_point')
+                    if mount_point and os.path.exists(mount_point):
+                        # Получаем список аудиофайлов на флешке
+                        for root, dirs, files in os.walk(mount_point):
+                            for file in files:
+                                if file.endswith(('.wav', '.mp3')):
+                                    file_path = os.path.join(root, file)
+                                    # Получаем человекочитаемое название файла
+                                    if hasattr(self, 'playback_manager') and self.playback_manager:
+                                        readable_name = self.playback_manager.get_human_readable_filename(file_path)
+                                        speech_texts.add(readable_name)
+        except Exception as e:
+            print(f"Ошибка при получении имен файлов с внешнего носителя: {e}")
+            sentry_sdk.capture_exception(e)
         
         # Предварительно генерируем все звуки для всех голосов
         self.tts_manager.pre_generate_menu_items(speech_texts, voices=voices)
@@ -503,11 +558,7 @@ class MenuManager:
         speech_texts = set()
         
         def collect_speech_texts(menu):
-            # Добавляем название меню
-            speech_texts.add(menu.get_speech_text())
-            speech_texts.add(f"Меню {menu.name}")
-            
-            # Добавляем все пункты меню
+            # Добавляем только тексты пунктов меню, не озвучиваем название самого меню
             for item in menu.items:
                 speech_texts.add(item.get_speech_text())
                 if isinstance(item, SubMenu):
@@ -516,8 +567,10 @@ class MenuManager:
         # Начинаем с корневого меню
         collect_speech_texts(self.root_menu)
         
-        # Добавляем системные сообщения
-        speech_texts.add("Возврат в главное меню")
+        # Добавляем системные сообщения для возврата
+        speech_texts.add("Возврат в")
+        speech_texts.add("главное меню")
+        speech_texts.add("предыдущее меню")
         speech_texts.add("Голос успешно изменен")
         
         # Добавляем сообщения для диктофона
@@ -525,12 +578,102 @@ class MenuManager:
         speech_texts.add("Запись приостановлена")
         speech_texts.add("Запись возобновлена")
         speech_texts.add("Запись остановлена")
-        speech_texts.add("Запись сохранена в папку")
+        speech_texts.add("Запись сохранена в папку")  # Первая часть сообщения
         speech_texts.add("Запись отменена")
         speech_texts.add("Выберите папку для записи")
         speech_texts.add("Папка A")
         speech_texts.add("Папка B")
         speech_texts.add("Папка C")
+        
+        # Добавляем сообщения для информации о файлах в папках
+        speech_texts.add("В папке")  # Первая часть сообщения
+        speech_texts.add("нет записей")  # Третья часть сообщения
+        
+        # Добавляем слова для формирования сообщений о количестве файлов
+        for count in range(0, 100):  # Поддержка до 99 файлов
+            speech_texts.add(str(count))
+        speech_texts.add("файл")
+        speech_texts.add("файла")
+        speech_texts.add("файлов")
+        
+        # Добавляем слово "Папка" для навигации по файлам на флешке
+        speech_texts.add("Папка")
+        
+        # Добавляем сообщения для воспроизведения
+        speech_texts.add("Воспроизведение")
+        speech_texts.add("Пауза")
+        speech_texts.add("Прослушано")
+        speech_texts.add("Переключаю вперед на запись")
+        speech_texts.add("Переключаю назад на запись")
+        speech_texts.add("Ошибка при переключении трека")
+        speech_texts.add("Запись успешно удалена")
+        speech_texts.add("Ошибка при удалении записи")
+        
+        # Добавляем сообщения для удаления файлов
+        speech_texts.add("Вы точно хотите удалить эту запись")
+        speech_texts.add("Запись успешно удалена")
+        
+        # Добавляем сообщения для внешнего носителя
+        speech_texts.add("Недостаточно места на флешке")
+        speech_texts.add("Копирование успешно завершено")
+        speech_texts.add("Возврат в режим внешнего носителя")
+        speech_texts.add("Произошла ошибка при копировании файлов")
+        speech_texts.add("Флешка была отключена")
+        speech_texts.add("Директория с записями не найдена")
+        speech_texts.add("Скопировать все аудиозаписи из всех папок")
+        speech_texts.add("Скопировать все аудиозаписи из папки")
+        
+        # Добавляем сообщения для настроек громкости (теперь отдельно)
+        speech_texts.add("Установлен уровень громкости")
+        speech_texts.add("Уровень громкости")
+        speech_texts.add("Сейчас установлен уровень громкости")
+        
+        # Добавляем числовые значения для уровней громкости
+        for level in range(0, 7):
+            speech_texts.add(f"{level}")
+        
+        # Попытка добавить имена записей диктофона из папок A, B, C
+        try:
+            # Путь к папке с записями
+            records_dir = self.records_dir
+            if os.path.exists(records_dir):
+                # Папки для диктофона
+                folders = ["A", "B", "C"]
+                for folder in folders:
+                    folder_path = os.path.join(records_dir, folder)
+                    if os.path.exists(folder_path):
+                        # Получаем список файлов в папке
+                        files = [f for f in os.listdir(folder_path) if f.endswith(('.wav', '.mp3'))]
+                        for file in files:
+                            file_path = os.path.join(folder_path, file)
+                            # Получаем человекочитаемое название файла
+                            if hasattr(self, 'playback_manager') and self.playback_manager:
+                                readable_name = self.playback_manager.get_human_readable_filename(file_path)
+                                speech_texts.add(readable_name)
+        except Exception as e:
+            print(f"Ошибка при получении имен файлов из папок диктофона: {e}")
+            sentry_sdk.capture_exception(e)
+        
+        # Попытка добавить имена файлов с подключенного внешнего носителя
+        try:
+            # Проверяем подключенные USB-устройства
+            if hasattr(self, 'external_storage_menu') and self.external_storage_menu:
+                mounted_devices = self.external_storage_menu.get_mounted_devices()
+                for device_info in mounted_devices:
+                    mount_point = device_info.get('mount_point')
+                    if mount_point and os.path.exists(mount_point):
+                        # Получаем список аудиофайлов на флешке
+                        for root, dirs, files in os.walk(mount_point):
+                            for file in files:
+                                if file.endswith(('.wav', '.mp3')):
+                                    file_path = os.path.join(root, file)
+                                    # Получаем человекочитаемое название файла
+                                    if hasattr(self, 'playback_manager') and self.playback_manager:
+                                        readable_name = self.playback_manager.get_human_readable_filename(file_path)
+                                        speech_texts.add(readable_name)
+        except Exception as e:
+            print(f"Ошибка при получении имен файлов с внешнего носителя: {e}")
+            sentry_sdk.capture_exception(e)
         
         # Предварительно генерируем только отсутствующие звуки для всех голосов
         self.tts_manager.pre_generate_missing_menu_items(speech_texts, voices=voices)
@@ -1165,9 +1308,26 @@ class MenuManager:
             files_in_c = self.playback_manager.count_files_in_folder("C")
             
             # Добавляем пункты меню для папок с указанием количества файлов
-            folder_menu.add_item(MenuItem(f"Папка A [{files_in_a} {self._get_files_word(files_in_a)}]", action=lambda: self._start_recording("A")))
-            folder_menu.add_item(MenuItem(f"Папка B [{files_in_b} {self._get_files_word(files_in_b)}]", action=lambda: self._start_recording("B")))
-            folder_menu.add_item(MenuItem(f"Папка C [{files_in_c} {self._get_files_word(files_in_c)}]", action=lambda: self._start_recording("C")))
+            folder_a_item = MenuItem(
+                f"Папка A [{files_in_a} {self._get_files_word(files_in_a)}]", 
+                action=lambda: self._start_recording("A"),
+                speech_text="Папка A"  # Только название папки для озвучки
+            )
+            folder_menu.add_item(folder_a_item)
+            
+            folder_b_item = MenuItem(
+                f"Папка B [{files_in_b} {self._get_files_word(files_in_b)}]", 
+                action=lambda: self._start_recording("B"),
+                speech_text="Папка B"  # Только название папки для озвучки
+            )
+            folder_menu.add_item(folder_b_item)
+            
+            folder_c_item = MenuItem(
+                f"Папка C [{files_in_c} {self._get_files_word(files_in_c)}]", 
+                action=lambda: self._start_recording("C"),
+                speech_text="Папка C"  # Только название папки для озвучки
+            )
+            folder_menu.add_item(folder_c_item)
             
             # Переключаемся на меню выбора папки
             self.current_menu = folder_menu
@@ -1193,9 +1353,26 @@ class MenuManager:
             files_in_c = self.playback_manager.count_files_in_folder("C")
             
             # Добавляем пункты меню для папок с указанием количества файлов
-            play_menu.add_item(MenuItem(f"Папка A [{files_in_a} {self._get_files_word(files_in_a)}]", action=lambda: self._show_play_files_menu("A")))
-            play_menu.add_item(MenuItem(f"Папка B [{files_in_b} {self._get_files_word(files_in_b)}]", action=lambda: self._show_play_files_menu("B")))
-            play_menu.add_item(MenuItem(f"Папка C [{files_in_c} {self._get_files_word(files_in_c)}]", action=lambda: self._show_play_files_menu("C")))
+            folder_a_item = MenuItem(
+                f"Папка A [{files_in_a} {self._get_files_word(files_in_a)}]",
+                action=lambda: self._show_play_files_menu("A"),
+                speech_text="Папка A"  # Только название папки для озвучки
+            )
+            play_menu.add_item(folder_a_item)
+            
+            folder_b_item = MenuItem(
+                f"Папка B [{files_in_b} {self._get_files_word(files_in_b)}]",
+                action=lambda: self._show_play_files_menu("B"),
+                speech_text="Папка B"  # Только название папки для озвучки
+            )
+            play_menu.add_item(folder_b_item)
+            
+            folder_c_item = MenuItem(
+                f"Папка C [{files_in_c} {self._get_files_word(files_in_c)}]",
+                action=lambda: self._show_play_files_menu("C"),
+                speech_text="Папка C"  # Только название папки для озвучки
+            )
+            play_menu.add_item(folder_c_item)
             
             # Переключаемся на меню выбора папки
             self.current_menu = play_menu
@@ -1313,16 +1490,20 @@ class MenuManager:
                 print(f"В папке {folder} нет файлов")
                 
                 # Создаем сообщение
-                message = f"В папке {os.path.basename(folder)} нет записей"
+                folder_name = os.path.basename(folder)
                 
-                # Отображаем и озвучиваем сообщение
-                self.display_manager.display_message(message, title="Пустая папка")
+                # Отображаем сообщение на экране
+                self.display_manager.display_message(f"В папке {folder_name} нет записей", title="Пустая папка")
                 
                 if self.tts_enabled:
                     # Получаем текущий голос из настроек
                     voice = self.settings_manager.get_voice()
-                    self.tts_manager.play_speech(message, voice_id=voice)
-                    
+                    self.tts_manager.play_speech("В папке", voice_id=voice)
+                    time.sleep(0.1)  # Небольшая пауза между сообщениями
+                    self.tts_manager.play_speech(folder_name, voice_id=voice)
+                    time.sleep(0.1)  # Небольшая пауза между сообщениями
+                    self.tts_manager.play_speech("нет записей", voice_id=voice)
+                
                 # Возвращаемся в предыдущее меню
                 time.sleep(2)
                 self.display_current_menu()
@@ -1796,6 +1977,34 @@ class MenuManager:
                         print("Файл удален, обновляем список файлов")
                     
                     try:
+                        # Добавляем задержку для гарантированного воспроизведения сообщения об удалении
+                        time.sleep(2.0)
+                        
+                        # Проверяем, был ли удален файл с флешки
+                        if result == "usb_deleted":
+                            if self.debug:
+                                print("Удален файл с флешки, выходим из режима плеера")
+                                
+                            # Деактивируем режим плеера
+                            self.player_mode_active = False
+                            self.playback_state["active"] = False
+                            self.playback_state["paused"] = False
+                            
+                            # Возвращаемся в родительское меню (меню флешки)
+                            if self.current_menu and self.current_menu.parent:
+                                self.current_menu = self.current_menu.parent
+                                
+                                # Если это меню внешнего накопителя, перезагружаем его
+                                if hasattr(self.current_menu, 'on_enter'):
+                                    try:
+                                        self.current_menu.on_enter()
+                                    except Exception as reload_e:
+                                        print(f"Ошибка при перезагрузке меню флешки: {reload_e}")
+                                        
+                                # Отображаем обновленное меню
+                                self.display_current_menu()
+                            return
+                        
                         # Создаем новое меню с обновленным списком файлов
                         files_menu = SubMenu(f"Записи в папке {current_folder}")
                         
@@ -2264,27 +2473,22 @@ class MenuManager:
             return "файлов"
 
     def _announce_current_volume(self):
-        """
-        Озвучивает текущую громкость системных сообщений
-        """
+        """Озвучивает текущий уровень громкости"""
         try:
-            # Проверяем флаг, чтобы избежать двойного озвучивания
+            # Проверяем, был ли уже озвучен уровень громкости
             if hasattr(self, '_volume_announced') and self._volume_announced:
-                # Сбрасываем флаг для следующего вызова
-                self._volume_announced = False
+                if self.debug:
+                    print("Уровень громкости уже был озвучен")
                 return
-                
-            # Получаем текущую громкость в процентах
-            current_volume = self.settings_manager.get_system_volume()
             
-            # Преобразуем проценты в уровень (0-6)
-            level = (current_volume - 40) // 10
-            if level < 0:
-                level = 0
-            elif level > 6:
-                level = 6
-                
-            # Озвучиваем текущий уровень блокирующим методом
+            # Получаем текущую громкость из настроек
+            volume = self.settings_manager.get_system_volume()
+            level = (volume - 40) // 10  # Преобразуем проценты обратно в уровень
+            
+            if self.debug:
+                print(f"Озвучивание текущего уровня громкости: {level} (соответствует {volume}%)")
+            
+            # Озвучиваем текущий уровень громкости
             self.tts_manager.play_speech_blocking(f"Сейчас установлен уровень громкости {level}")
             
             # Устанавливаем флаг, что сообщение было озвучено
@@ -2295,14 +2499,39 @@ class MenuManager:
             print(f"[MENU ERROR] {error_msg}")
             sentry_sdk.capture_exception(e)
 
-    def change_system_volume(self, level):
+    def change_system_volume(self, level=None):
         """
-        Изменяет системную громкость
+        Изменяет уровень громкости системы
         
         Args:
-            level (int): Уровень громкости от 0 до 6
+            level (int, optional): Уровень громкости от 0 до 6
         """
         try:
+            # Если уровень не указан, запрашиваем его
+            if level is None:
+                if self.debug:
+                    print("Запрос уровня громкости...")
+                
+                # Получаем текущую громкость из настроек
+                current_volume = self.settings_manager.get_system_volume()
+                current_level = (current_volume - 40) // 10  # Преобразуем проценты обратно в уровень
+                
+                # Показываем текущую громкость
+                if self.debug:
+                    print(f"Текущий уровень громкости: {current_level} (соответствует {current_volume}%)")
+                    
+                if self.tts_enabled:
+                    voice_id = self.settings_manager.get_voice()
+                    self.tts_manager.play_speech_blocking(f"Установлен уровень громкости {current_level}")
+                
+                # Запрашиваем новый уровень громкости
+                level_str = input("Введите уровень громкости (0-6): ")
+                try:
+                    level = int(level_str)
+                except:
+                    print("Введен некорректный уровень громкости")
+                    return
+            
             # Проверяем, что уровень в допустимом диапазоне
             if not (0 <= level <= 6):
                 print(f"[MENU ERROR] Некорректный уровень громкости: {level}")
@@ -2432,3 +2661,83 @@ class MenuManager:
             
     # Удаляем дублирующий метод select() из этого места файла
     # Метод process_key_event будет использовать select_current_item() вместо него
+
+    def announce_current_menu_item(self):
+        """Озвучивает текущий выбранный пункт меню"""
+        try:
+            if not self.current_menu or not self.tts_enabled:
+                return
+                
+            current_item = self.current_menu.get_current_item()
+            if not current_item:
+                return
+                
+            # Получаем текст для озвучки
+            item_speech_text = current_item.get_speech_text()
+            
+            # Получаем текущий голос из настроек
+            voice_id = self.settings_manager.get_voice()
+            
+            if self.debug:
+                print(f"Озвучиваем текущий пункт: {item_speech_text}, голос: {voice_id}")
+            
+            # Проверяем, является ли элемент папкой на флешке
+            is_folder = hasattr(current_item, 'is_folder') and callable(current_item.is_folder) and current_item.is_folder()
+            
+            # Проверяем, является ли элемент папкой диктофона (A, B, C)
+            is_recorder_folder = item_speech_text in ["Папка A", "Папка B", "Папка C"]
+            
+            if is_folder or is_recorder_folder:
+                # Если это папка, сначала озвучиваем слово "Папка"
+                if hasattr(self.tts_manager, 'play_speech_blocking'):
+                    self.tts_manager.play_speech_blocking("Папка", voice_id=voice_id)
+                else:
+                    self.tts_manager.play_speech("Папка", voice_id=voice_id)
+                    time.sleep(0.5)  # Более длинная пауза для гарантированного воспроизведения
+                
+                time.sleep(0.1)  # Небольшая пауза между сообщениями
+                
+                # Затем озвучиваем имя папки
+                folder_name = item_speech_text
+                if is_recorder_folder:
+                    # Для папок диктофона извлекаем только букву (A, B, C)
+                    folder_name = item_speech_text[-1]  # Последний символ - буква папки
+                
+                # Озвучиваем имя папки
+                if hasattr(self.tts_manager, 'play_speech_blocking'):
+                    self.tts_manager.play_speech_blocking(folder_name, voice_id=voice_id)
+                else:
+                    self.tts_manager.play_speech(folder_name, voice_id=voice_id)
+                    time.sleep(0.5)  # Пауза для гарантированного воспроизведения
+            else:
+                # Обычное озвучивание для не-папок
+                self.tts_manager.play_speech(item_speech_text, voice_id=voice_id)
+            
+            # Для пунктов меню папок диктофона (A, B, C) озвучиваем количество файлов
+            # Для папок на флешке (is_folder) НЕ озвучиваем количество файлов
+            if not is_folder and (is_recorder_folder or item_speech_text in ["A", "B", "C"]) and hasattr(self, 'playback_manager'):
+                # Определяем букву папки
+                if is_recorder_folder:
+                    folder_letter = item_speech_text[-1]  # Последний символ в "Папка X"
+                else:
+                    folder_letter = item_speech_text  # Используем непосредственно название папки
+                
+                # Получаем количество файлов
+                files_count = self.playback_manager.count_files_in_folder(folder_letter)
+                
+                # Формируем текст о количестве файлов
+                files_text = f"{files_count} {self._get_files_word(files_count)}"
+                
+                # Озвучиваем с небольшой паузой
+                time.sleep(0.2)  # Пауза между сообщениями
+                
+                if hasattr(self.tts_manager, 'play_speech_blocking'):
+                    self.tts_manager.play_speech_blocking(files_text, voice_id=voice_id)
+                else:
+                    self.tts_manager.play_speech(files_text, voice_id=voice_id)
+                    time.sleep(1.0)  # Более длинная пауза для гарантированного воспроизведения
+                
+        except Exception as e:
+            error_msg = f"Ошибка при озвучивании пункта меню: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)

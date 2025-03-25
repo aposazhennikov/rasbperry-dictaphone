@@ -492,17 +492,20 @@ class RecorderManager:
                     sentry_sdk.capture_exception(e)
                 
                 # ЭТАП 5: Озвучиваем подтверждение сохранения
-                message = f"Запись сохранена в папке {folder}"
-                print(f"Воспроизведение сообщения '{message}'...")
+                print(f"Воспроизведение сообщения о сохранении...")
                 try:
                     # Получаем текущий голос из настроек
                     voice = self.settings_manager.get_voice() if hasattr(self, 'settings_manager') else None
                     
                     # Используем самый надежный метод воспроизведения
                     if hasattr(self.tts_manager, 'play_speech_blocking'):
-                        self.tts_manager.play_speech_blocking(message, voice_id=voice)
+                        self.tts_manager.play_speech_blocking("Запись сохранена в папке", voice_id=voice)
+                        time.sleep(0.1)  # Небольшая пауза между сообщениями
+                        self.tts_manager.play_speech_blocking(folder, voice_id=voice)
                     else:
-                        self.play_notification(message)
+                        self.play_notification("Запись сохранена в папке")
+                        time.sleep(0.1)  # Небольшая пауза между сообщениями
+                        self.play_notification(folder)
                         time.sleep(1)  # Дополнительная пауза
                 except Exception as e:
                     print(f"Ошибка при озвучивании подтверждения: {e}")
