@@ -121,9 +121,9 @@ class BulkDeleteManager:
                     time.sleep(0.1)  # Небольшая пауза между сообщениями
                     tts_manager.play_speech_blocking("нет записей", voice_id=voice)
                 
-                # Возвращаемся к меню удаления через 2 секунды
+                # Возвращаемся в меню диктофона через 2 секунды
                 time.sleep(2)
-                self.menu_manager.display_current_menu()
+                self.return_to_dictaphone_menu()
                 return
             
             # Создаем подменю для подтверждения удаления
@@ -144,7 +144,8 @@ class BulkDeleteManager:
             
             yes_item = MenuItem(
                 "Да",
-                action=lambda: self.execute_delete_folder(folder),
+                # Изменяем на показ финального подтверждения вместо прямого удаления
+                action=lambda: self.show_final_confirmation_folder(folder),
                 speech_text="Да"
             )
             confirm_menu.add_item(yes_item)
@@ -521,6 +522,59 @@ class BulkDeleteManager:
             # Возвращаемся в меню диктофона через 2 секунды
             time.sleep(2)
             self.return_to_dictaphone_menu()
+    
+    def show_final_confirmation_folder(self, folder):
+        """Показывает финальное подтверждение удаления записей из конкретной папки"""
+        try:
+            # Получаем доступ к необходимым компонентам из менеджера меню
+            settings_manager = self.menu_manager.settings_manager
+            tts_manager = self.menu_manager.tts_manager
+            display_manager = self.menu_manager.display_manager
+            tts_enabled = self.menu_manager.tts_enabled
+            
+            # Создаем подменю для финального подтверждения
+            final_confirm_menu = SubMenu(f"Финальное подтверждение удаления из папки {folder}", parent=self.menu_manager.current_menu)
+            
+            # Добавляем пункты меню подтверждения
+            # ВАЖНО: пункт "Нет" должен быть первым
+            no_item = MenuItem(
+                "Нет",
+                action=lambda: self.return_to_dictaphone_menu(),
+                speech_text="Нет"
+            )
+            final_confirm_menu.add_item(no_item)
+            
+            yes_item = MenuItem(
+                "Да",
+                action=lambda: self.execute_delete_folder(folder),
+                speech_text="Да"
+            )
+            final_confirm_menu.add_item(yes_item)
+            
+            # Переключаемся на меню финального подтверждения
+            self.menu_manager.current_menu = final_confirm_menu
+            
+            # Отображаем сообщение подтверждения на экране
+            message = f"Финальное подтверждение удаления всех записей из папки {folder}"
+            display_manager.display_message(message, title="Окончательное подтверждение")
+            
+            # Озвучиваем сообщение
+            if tts_enabled:
+                try:
+                    # Используем мужской голос для системных сообщений
+                    system_voice = "ru-RU-Standard-D"
+                    
+                    tts_manager.play_speech_blocking(f"Финальное подтверждение удаления всех записей из папки {folder}", voice_id=system_voice)
+                except Exception as voice_error:
+                    print(f"Ошибка при озвучивании финального подтверждения: {voice_error}")
+                    sentry_sdk.capture_exception(voice_error)
+            
+            # Отображаем меню подтверждения
+            self.menu_manager.display_current_menu()
+        except Exception as e:
+            error_msg = f"Ошибка при отображении финального подтверждения: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
     
     def _get_files_word(self, count):
         """

@@ -127,6 +127,14 @@ class MenuManager:
                 menu_manager=self  # Передаем ссылку на себя
             )
             
+            # Создаем менеджер для массового удаления записей
+            from .bulk_delete_manager import BulkDeleteManager
+            self.bulk_delete_manager = BulkDeleteManager(
+                menu_manager=self,
+                records_dir=records_dir,
+                debug=debug
+            )
+            
             # Состояние записи
             self.recording_state = {
                 "active": False,
@@ -1337,24 +1345,24 @@ class MenuManager:
             # Добавляем пункты меню для папок с указанием количества файлов
             folder_a_item = MenuItem(
                 f"Папка A [{files_in_a} {self._get_files_word(files_in_a)}]",
-                # Изменяем вызов чтобы начать воспроизведение сразу первого файла
-                action=lambda: self._show_play_files_menu("A", start_with_file=0) if files_in_a > 0 else self._show_play_files_menu("A"),
+                # Возвращаем исходное поведение - просто отображаем список файлов без автозапуска
+                action=lambda: self._show_play_files_menu("A"),
                 speech_text="Папка A"  # Только название папки для озвучки
             )
             play_menu.add_item(folder_a_item)
             
             folder_b_item = MenuItem(
                 f"Папка B [{files_in_b} {self._get_files_word(files_in_b)}]",
-                # Изменяем вызов чтобы начать воспроизведение сразу первого файла
-                action=lambda: self._show_play_files_menu("B", start_with_file=0) if files_in_b > 0 else self._show_play_files_menu("B"),
+                # Возвращаем исходное поведение - просто отображаем список файлов без автозапуска
+                action=lambda: self._show_play_files_menu("B"),
                 speech_text="Папка B"  # Только название папки для озвучки
             )
             play_menu.add_item(folder_b_item)
             
             folder_c_item = MenuItem(
                 f"Папка C [{files_in_c} {self._get_files_word(files_in_c)}]",
-                # Изменяем вызов чтобы начать воспроизведение сразу первого файла
-                action=lambda: self._show_play_files_menu("C", start_with_file=0) if files_in_c > 0 else self._show_play_files_menu("C"),
+                # Возвращаем исходное поведение - просто отображаем список файлов без автозапуска
+                action=lambda: self._show_play_files_menu("C"),
                 speech_text="Папка C"  # Только название папки для озвучки
             )
             play_menu.add_item(folder_c_item)
@@ -1396,53 +1404,17 @@ class MenuManager:
                 self.playback_state["current_file"] = file_info["description"]
                 self.playback_state["folder"] = file_info["folder"]
             
-            # Проверяем, активен ли режим подтверждения удаления
+            # Обновляем экран воспроизведения с учетом режима подтверждения удаления
             if self.playback_manager.is_delete_confirmation_active():
-                # Прерываем текущее воспроизведение системного сообщения при любом нажатии
-                if self.tts_manager:
-                    self.tts_manager.stop_current_sound()
-                
-                # Обработка кнопок в режиме подтверждения удаления
-                if button_id == "KEY_UP" or button_id == "KEY_DOWN":
-                    # Переключение между "Да" и "Нет"
-                    current_selection = self.playback_manager.confirm_delete_selected
-                    self.playback_manager.confirm_delete_selected = "Да" if current_selection == "Нет" else "Нет"
-                    
-                    # Озвучиваем текущий выбор без лишних сообщений
-                    voice_id = "ru-RU-Standard-D"
-                    self.tts_manager.play_speech(self.playback_manager.confirm_delete_selected, voice_id=voice_id)
-                    
-                    # Обновляем экран
-                    self._update_playback_info()
-                    return True
-                
-                elif button_id == "KEY_SELECT":
-                    # Подтверждаем выбор
-                    confirmed = self.playback_manager.confirm_delete_selected == "Да"
-                    self._confirm_delete(confirmed)
-                    
-                    # Если отменили удаление (выбрали "Нет"), гарантируем, что остаемся в режиме воспроизведения
-                    if not confirmed:
-                        self.player_mode_active = True
-                        self.playback_state["active"] = True
-                    
-                    return True
-                
-                elif button_id == "KEY_BACK" or button_id == "KEY_POWER":
-                    # Отменяем удаление
-                    self._confirm_delete(False)
-                    
-                    # Гарантируем, что остаемся в режиме воспроизведения
-                    self.player_mode_active = True
-                    self.playback_state["active"] = True
-                    
-                    return True
-                
-                # В режиме подтверждения удаления все другие кнопки игнорируем
-                return True
-            
-            # Обновляем экран воспроизведения, если воспроизведение активно и не активен режим подтверждения
+                # Специальный вид экрана для подтверждения удаления
+                # Здесь только отображается информация, не обрабатываются кнопки
+                confirm_selection = self.playback_manager.confirm_delete_selected
+                self.display_manager.display_delete_confirmation(
+                    file_name=self.playback_state["current_file"],
+                    selected_option=confirm_selection
+                )
             elif self.playback_state["active"]:
+                # Обычный экран воспроизведения
                 status = "Paused" if self.playback_state["paused"] else "Playing"
                 self.display_manager.display_playback_screen(
                     status=status,
