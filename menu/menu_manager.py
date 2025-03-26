@@ -223,6 +223,10 @@ class MenuManager:
         try:
             if not self.current_menu:
                 return False
+            
+            # Прерываем текущее воспроизведение системного сообщения
+            if self.tts_enabled and self.tts_manager:
+                self.tts_manager.stop_current_sound()
                 
             if self.debug:
                 print("Навигация: ВВЕРХ")
@@ -270,6 +274,10 @@ class MenuManager:
         try:
             if not self.current_menu:
                 return False
+            
+            # Прерываем текущее воспроизведение системного сообщения
+            if self.tts_enabled and self.tts_manager:
+                self.tts_manager.stop_current_sound()
                 
             if self.debug:
                 print("Навигация: ВНИЗ")
@@ -331,6 +339,10 @@ class MenuManager:
         """Выбирает текущий пункт меню"""
         if not self.current_menu:
             return
+            
+        # Прерываем текущее воспроизведение системного сообщения при выборе пункта меню
+        if self.tts_enabled and self.tts_manager:
+            self.tts_manager.stop_current_sound()
             
         # Получаем текущий выбранный пункт меню
         item = self.current_menu.get_current_item()
@@ -1277,6 +1289,7 @@ class MenuManager:
             # Добавляем пункты меню для папок с указанием количества файлов
             folder_a_item = MenuItem(
                 f"Папка A [{files_in_a} {self._get_files_word(files_in_a)}]", 
+                # Непосредственно начинаем запись при выборе папки
                 action=lambda: self._start_recording("A"),
                 speech_text="Папка A"  # Только название папки для озвучки
             )
@@ -1284,6 +1297,7 @@ class MenuManager:
             
             folder_b_item = MenuItem(
                 f"Папка B [{files_in_b} {self._get_files_word(files_in_b)}]", 
+                # Непосредственно начинаем запись при выборе папки
                 action=lambda: self._start_recording("B"),
                 speech_text="Папка B"  # Только название папки для озвучки
             )
@@ -1291,6 +1305,7 @@ class MenuManager:
             
             folder_c_item = MenuItem(
                 f"Папка C [{files_in_c} {self._get_files_word(files_in_c)}]", 
+                # Непосредственно начинаем запись при выборе папки
                 action=lambda: self._start_recording("C"),
                 speech_text="Папка C"  # Только название папки для озвучки
             )
@@ -1322,21 +1337,24 @@ class MenuManager:
             # Добавляем пункты меню для папок с указанием количества файлов
             folder_a_item = MenuItem(
                 f"Папка A [{files_in_a} {self._get_files_word(files_in_a)}]",
-                action=lambda: self._show_play_files_menu("A"),
+                # Изменяем вызов чтобы начать воспроизведение сразу первого файла
+                action=lambda: self._show_play_files_menu("A", start_with_file=0) if files_in_a > 0 else self._show_play_files_menu("A"),
                 speech_text="Папка A"  # Только название папки для озвучки
             )
             play_menu.add_item(folder_a_item)
             
             folder_b_item = MenuItem(
                 f"Папка B [{files_in_b} {self._get_files_word(files_in_b)}]",
-                action=lambda: self._show_play_files_menu("B"),
+                # Изменяем вызов чтобы начать воспроизведение сразу первого файла
+                action=lambda: self._show_play_files_menu("B", start_with_file=0) if files_in_b > 0 else self._show_play_files_menu("B"),
                 speech_text="Папка B"  # Только название папки для озвучки
             )
             play_menu.add_item(folder_b_item)
             
             folder_c_item = MenuItem(
                 f"Папка C [{files_in_c} {self._get_files_word(files_in_c)}]",
-                action=lambda: self._show_play_files_menu("C"),
+                # Изменяем вызов чтобы начать воспроизведение сразу первого файла
+                action=lambda: self._show_play_files_menu("C", start_with_file=0) if files_in_c > 0 else self._show_play_files_menu("C"),
                 speech_text="Папка C"  # Только название папки для озвучки
             )
             play_menu.add_item(folder_c_item)
@@ -1380,16 +1398,48 @@ class MenuManager:
             
             # Проверяем, активен ли режим подтверждения удаления
             if self.playback_manager.is_delete_confirmation_active():
-                # Отображаем экран подтверждения удаления
-                self.display_manager.display_delete_confirmation(
-                    file_name=self.playback_state["current_file"],
-                    selected_option=self.playback_manager.confirm_delete_selected
-                )
+                # Прерываем текущее воспроизведение системного сообщения при любом нажатии
+                if self.tts_manager:
+                    self.tts_manager.stop_current_sound()
                 
-                if self.debug:
-                    print(f"Отображение экрана подтверждения удаления: " +
-                        f"файл={self.playback_state['current_file']}, " +
-                        f"выбрано={self.playback_manager.confirm_delete_selected}")
+                # Обработка кнопок в режиме подтверждения удаления
+                if button_id == "KEY_UP" or button_id == "KEY_DOWN":
+                    # Переключение между "Да" и "Нет"
+                    current_selection = self.playback_manager.confirm_delete_selected
+                    self.playback_manager.confirm_delete_selected = "Да" if current_selection == "Нет" else "Нет"
+                    
+                    # Озвучиваем текущий выбор без лишних сообщений
+                    voice_id = "ru-RU-Standard-D"
+                    self.tts_manager.play_speech(self.playback_manager.confirm_delete_selected, voice_id=voice_id)
+                    
+                    # Обновляем экран
+                    self._update_playback_info()
+                    return True
+                
+                elif button_id == "KEY_SELECT":
+                    # Подтверждаем выбор
+                    confirmed = self.playback_manager.confirm_delete_selected == "Да"
+                    self._confirm_delete(confirmed)
+                    
+                    # Если отменили удаление (выбрали "Нет"), гарантируем, что остаемся в режиме воспроизведения
+                    if not confirmed:
+                        self.player_mode_active = True
+                        self.playback_state["active"] = True
+                    
+                    return True
+                
+                elif button_id == "KEY_BACK" or button_id == "KEY_POWER":
+                    # Отменяем удаление
+                    self._confirm_delete(False)
+                    
+                    # Гарантируем, что остаемся в режиме воспроизведения
+                    self.player_mode_active = True
+                    self.playback_state["active"] = True
+                    
+                    return True
+                
+                # В режиме подтверждения удаления все другие кнопки игнорируем
+                return True
             
             # Обновляем экран воспроизведения, если воспроизведение активно и не активен режим подтверждения
             elif self.playback_state["active"]:
@@ -2208,6 +2258,12 @@ class MenuManager:
             bool: True если кнопка была обработана
         """
         try:
+            # Прерываем текущее воспроизведение системного сообщения при любом нажатии кнопки
+            if self.tts_enabled and self.tts_manager:
+                if self.debug:
+                    print(f"Прерывание текущего системного сообщения при нажатии кнопки {button_id}")
+                self.tts_manager.stop_current_sound()
+                
             # Специальная обработка для кнопки BACK в режиме аудиоплеера
             # Чтобы эта кнопка всегда имела высший приоритет
             if button_id == "KEY_BACK" and (self.player_mode_active or self.playback_state["active"]):
@@ -2326,6 +2382,10 @@ class MenuManager:
             
             # В режиме аудиоплеера обрабатываем кнопки по-особому
             elif self.player_mode_active:
+                # Прерываем текущее воспроизведение системного сообщения при любом нажатии в режиме плеера
+                if self.tts_manager:
+                    self.tts_manager.stop_current_sound()
+                
                 # Обработка кнопок в режиме аудиоплеера
                 if button_id == "KEY_PAGEUP":
                     # Уменьшаем громкость
@@ -2388,11 +2448,17 @@ class MenuManager:
             elif is_recording:
                 # Код обработки кнопок в режиме записи
                 if button_id == "KEY_SELECT":
+                    # Прерываем текущее воспроизведение системного сообщения
+                    if self.tts_manager:
+                        self.tts_manager.stop_current_sound()
                     # Пауза/продолжить запись
                     self._toggle_pause_recording()
                     return True
                     
                 elif button_id == "KEY_BACK":
+                    # Прерываем текущее воспроизведение системного сообщения
+                    if self.tts_manager:
+                        self.tts_manager.stop_current_sound()
                     # Остановка записи
                     self._stop_recording()
                     return True
@@ -2404,16 +2470,28 @@ class MenuManager:
             else:
                 # Стандартная навигация по меню
                 if button_id == "KEY_UP":
+                    # Прерываем текущее воспроизведение системного сообщения при навигации
+                    if self.tts_manager:
+                        self.tts_manager.stop_current_sound()
                     return self.move_up()
                     
                 elif button_id == "KEY_DOWN":
+                    # Прерываем текущее воспроизведение системного сообщения при навигации
+                    if self.tts_manager:
+                        self.tts_manager.stop_current_sound()
                     return self.move_down()
                     
                 elif button_id == "KEY_SELECT":
+                    # Прерываем текущее воспроизведение системного сообщения при выборе
+                    if self.tts_manager:
+                        self.tts_manager.stop_current_sound()
                     self.select_current_item()
                     return True
                     
                 elif button_id == "KEY_BACK":
+                    # Прерываем текущее воспроизведение системного сообщения при возврате
+                    if self.tts_manager:
+                        self.tts_manager.stop_current_sound()
                     self.go_back()
                     return True
             
@@ -2661,27 +2739,22 @@ class MenuManager:
             is_recorder_folder = item_speech_text in ["Папка A", "Папка B", "Папка C"]
             
             if is_folder or is_recorder_folder:
-                # Если это папка, сначала озвучиваем слово "Папка"
-                if hasattr(self.tts_manager, 'play_speech_blocking'):
-                    self.tts_manager.play_speech_blocking("Папка", voice_id=voice_id)
-                else:
-                    self.tts_manager.play_speech("Папка", voice_id=voice_id)
-                    time.sleep(0.5)  # Более длинная пауза для гарантированного воспроизведения
-                
-                time.sleep(0.1)  # Небольшая пауза между сообщениями
-                
-                # Затем озвучиваем имя папки
+                # Если это папка, формируем полное сообщение для озвучивания
                 folder_name = item_speech_text
                 if is_recorder_folder:
-                    # Для папок диктофона извлекаем только букву (A, B, C)
-                    folder_name = item_speech_text[-1]  # Последний символ - буква папки
-                
-                # Озвучиваем имя папки
-                if hasattr(self.tts_manager, 'play_speech_blocking'):
-                    self.tts_manager.play_speech_blocking(folder_name, voice_id=voice_id)
+                    # Для папок диктофона не меняем название (оставляем "Папка A" и т.д.)
+                    full_text = folder_name
                 else:
-                    self.tts_manager.play_speech(folder_name, voice_id=voice_id)
-                    time.sleep(0.5)  # Пауза для гарантированного воспроизведения
+                    # Для папок на флешке добавляем слово "Папка" перед названием
+                    full_text = f"Папка {folder_name}"
+                
+                # Используем блокирующий вызов для названия папки, чтобы оно было произнесено полностью
+                if hasattr(self.tts_manager, 'play_speech_blocking'):
+                    self.tts_manager.play_speech_blocking(full_text, voice_id=voice_id)
+                else:
+                    self.tts_manager.play_speech(full_text, voice_id=voice_id)
+                    # Подождем немного больше времени, чтобы название папки было произнесено полностью
+                    time.sleep(0.7)
             else:
                 # Обычное озвучивание для не-папок
                 self.tts_manager.play_speech(item_speech_text, voice_id=voice_id)
@@ -2701,14 +2774,11 @@ class MenuManager:
                 # Формируем текст о количестве файлов
                 files_text = f"{files_count} {self._get_files_word(files_count)}"
                 
-                # Озвучиваем с небольшой паузой
-                time.sleep(0.2)  # Пауза между сообщениями
+                # Небольшая пауза перед озвучиванием количества файлов
+                time.sleep(0.2)
                 
-                if hasattr(self.tts_manager, 'play_speech_blocking'):
-                    self.tts_manager.play_speech_blocking(files_text, voice_id=voice_id)
-                else:
-                    self.tts_manager.play_speech(files_text, voice_id=voice_id)
-                    time.sleep(1.0)  # Более длинная пауза для гарантированного воспроизведения
+                # Озвучиваем количество файлов
+                self.tts_manager.play_speech(files_text, voice_id=voice_id)
                 
         except Exception as e:
             error_msg = f"Ошибка при озвучивании пункта меню: {e}"

@@ -144,17 +144,30 @@ class AudioDeviceMenu(BaseMenu):
                 device_name = device.get("name", f"Устройство {i}")
                 
                 # Для встроенного микрофона используем специальное название
-                if device.get("is_built_in", False):
+                if device.get("is_built_in", False) or "USB Composite Device" in device_name:
                     device_name = "Встроенный микрофон в пульте"
-                # Для USB устройств используем упрощенное название
+                # Для USB устройств используем более информативное название
                 elif "USB" in device_name:
-                    device_name = "USB микрофон"
+                    # Если это (LCS) USB Audio Device, используем более понятное название
+                    if "(LCS)" in device_name:
+                        device_name = "Внешний USB микрофон"
+                    else:
+                        # Оставляем полное название для других устройств
+                        device_name = f"USB микрофон ({device_name})"
                 
                 # Добавляем префикс "✓" для выбранного устройства
-                selected = (device.get("card") == self.selected_device.get("card") and 
-                           device.get("device") == self.selected_device.get("device"))
+                is_selected = False
                 
-                menu_text = f"{'✓ ' if selected else ''}{device_name}"
+                # Проверяем, является ли это выбранное устройство
+                if device.get("is_built_in", False) and self.selected_device.get("is_built_in", False):
+                    # Оба устройства встроенные
+                    is_selected = True
+                elif (device.get("card") == self.selected_device.get("card") and 
+                     device.get("device") == self.selected_device.get("device")):
+                    # Совпадение по card и device
+                    is_selected = True
+                
+                menu_text = f"{'✓ ' if is_selected else ''}{device_name}"
                 
                 # Создаем объект MenuItem для совместимости с MenuManager
                 menu_item = DeviceMenuItem(menu_text, device, lambda d=device: self.select_device(d))
@@ -169,6 +182,8 @@ class AudioDeviceMenu(BaseMenu):
             
             if self.debug:
                 print(f"Обновлена структура меню, {len(self.menu_structure)} пунктов")
+                for i, item in enumerate(self.menu_structure):
+                    print(f"  {i}: {item['text']}")
         except Exception as e:
             error_msg = f"Ошибка при обновлении структуры меню: {e}"
             print(error_msg)
@@ -185,13 +200,25 @@ class AudioDeviceMenu(BaseMenu):
             bool: True если успешно, иначе False
         """
         try:
+            # Подготавливаем имя устройства для отображения и логирования
+            device_name = device.get("name", "Неизвестное устройство")
+            if device.get("is_built_in", False) or "USB Composite Device" in device_name:
+                display_name = "Встроенный микрофон в пульте"
+            elif "USB" in device_name:
+                if "(LCS)" in device_name:
+                    display_name = "Внешний USB микрофон"
+                else:
+                    display_name = f"USB микрофон ({device_name})"
+            else:
+                display_name = device_name
+                
             if self.debug:
-                print(f"Выбрано устройство: {device}")
+                print(f"Выбрано устройство: {display_name}")
             
             # Запоминаем текущее устройство
             old_device = self.selected_device
             
-            # Устанавливаем новое устройство
+            # Устанавливаем новое устройство в менеджере аудио устройств
             result = self.audio_device_manager.set_device(device)
             
             if result:
@@ -202,41 +229,53 @@ class AudioDeviceMenu(BaseMenu):
                 self.update_menu_structure()
                 
                 # Также обновляем устройство в recorder_manager, если он доступен
+                updated_in_recorder = False
                 if hasattr(self.menu_manager, 'recorder_manager') and self.menu_manager.recorder_manager:
                     try:
-                        # Используем новый метод для обновления устройства в менеджере записи
+                        if self.debug:
+                            print(f"Обновляем устройство в recorder_manager...")
+                        
+                        # Обновляем устройство в аудио менеджере меню
+                        self.menu_manager.audio_device = device
+                        
+                        # Используем метод update_audio_device для обновления устройства в менеджере записи
                         if hasattr(self.menu_manager.recorder_manager, 'update_audio_device'):
                             if self.debug:
                                 print(f"Вызываем метод update_audio_device для обновления устройства")
-                            self.menu_manager.recorder_manager.update_audio_device(device)
+                            updated = self.menu_manager.recorder_manager.update_audio_device(device)
+                            updated_in_recorder = updated
+                            if self.debug:
+                                print(f"Результат обновления устройства: {updated}")
                         else:
-                            # Обновляем устройство в текущем менеджере записи
+                            # Обновляем устройство в текущем менеджере записи напрямую
                             self.menu_manager.recorder_manager.audio_device = device
+                            if self.debug:
+                                print(f"Устройство обновлено в recorder_manager напрямую")
                             
                             # Обновляем устройство в активном рекордере, если он есть
                             if hasattr(self.menu_manager.recorder_manager, 'recorder') and self.menu_manager.recorder_manager.recorder:
                                 if self.debug:
-                                    print(f"Обновляем устройство в активном рекордере на: {device}")
+                                    print(f"Обновляем устройство в активном рекордере на: {display_name}")
                                 self.menu_manager.recorder_manager.recorder.set_audio_device(device)
+                                updated_in_recorder = True
                             
                         if self.debug:
-                            print(f"Устройство успешно обновлено в менеджере записи")
+                            print(f"Устройство успешно обновлено в менеджере записи: {updated_in_recorder}")
                     except Exception as recorder_error:
-                        print(f"Ошибка при обновлении устройства в менеджере записи: {recorder_error}")
+                        error_msg = f"Ошибка при обновлении устройства в менеджере записи: {recorder_error}"
+                        print(error_msg)
                         sentry_sdk.capture_exception(recorder_error)
                 
-                # Озвучиваем сообщение о выбранном устройстве
-                device_name = device.get("name", "Неизвестное устройство")
-                if device.get("is_built_in", False):
-                    device_name = "Встроенный микрофон в пульте"
-                elif "USB" in device_name:
-                    device_name = "USB микрофон"
+                # Озвучиваем сообщение о выбранном устройстве и результате обновления
+                message = f"Выбран микрофон {display_name}"
+                if updated_in_recorder:
+                    message += ". Устройство успешно обновлено"
                 
-                self.tts_manager.play_speech_blocking(f"Выбран микрофон {device_name}")
+                self.tts_manager.play_speech_blocking(message)
                 self.tts_manager.play_speech_blocking("Возврат в главное меню")
                 
                 if self.debug:
-                    print(f"Устройство успешно выбрано: {device_name}")
+                    print(f"Устройство успешно выбрано: {display_name}")
                 
                 # Возвращаемся в предыдущее меню
                 self.menu_manager.go_back()
@@ -325,53 +364,38 @@ class AudioDeviceMenu(BaseMenu):
             # Обновляем список устройств перед показом меню
             self.update_devices()
             
+            # Если нет доступных устройств, сообщаем об этом
+            if not self.items:
+                if self.debug:
+                    print("Нет доступных устройств для записи")
+                    
+                self.tts_manager.play_speech_blocking("Нет доступных устройств для записи")
+                self.tts_manager.play_speech_blocking("Возврат в предыдущее меню")
+                
+                time.sleep(1)
+                self.menu_manager.go_back()
+                return
+            
             # Озвучиваем информацию о текущем выбранном устройстве
             current_device_name = self.selected_device.get("name", "Неизвестное устройство")
-            if self.selected_device.get("is_built_in", False):
+            if self.selected_device.get("is_built_in", False) or "USB Composite Device" in current_device_name:
                 current_device_name = "Встроенный микрофон в пульте"
             elif "USB" in current_device_name:
-                current_device_name = "USB микрофон"
+                if "(LCS)" in current_device_name:
+                    current_device_name = "Внешний USB микрофон"
+                else:
+                    current_device_name = f"USB микрофон ({current_device_name})"
                 
             self.tts_manager.play_speech_blocking(f"Сейчас выбран микрофон: {current_device_name}")
             self.tts_manager.play_speech_blocking("Выбор устройства для записи")
             
-            # Если нет доступных устройств, сообщаем об этом
-            if not self.menu_structure:
-                self.tts_manager.play_speech("Нет доступных устройств для записи")
-                time.sleep(2)
-                self.menu_manager.go_back()
-                return
+            # Отображаем текущий пункт меню
+            self.menu_manager.current_menu = self
+            self.menu_manager.display_current_menu()
             
-            # Показываем меню
-            selected_index = 0
-            while True:
-                # Обновляем выбранный индекс, если он вышел за пределы меню
-                if selected_index >= len(self.menu_structure):
-                    selected_index = 0
-                
-                # Получаем текущий пункт меню
-                current_item = self.menu_structure[selected_index]
-                
-                # Озвучиваем текущий пункт
-                self.tts_manager.play_speech(current_item["text"])
-                
-                # Ждем действия пользователя
-                key = self.menu_manager.wait_for_key()
-                
-                if key == "KEY_UP":
-                    # Переход к предыдущему пункту
-                    selected_index = (selected_index - 1) % len(self.menu_structure)
-                elif key == "KEY_DOWN":
-                    # Переход к следующему пункту
-                    selected_index = (selected_index + 1) % len(self.menu_structure)
-                elif key == "KEY_SELECT":
-                    # Выбор текущего пункта
-                    current_item["action"]()
-                    break
-                elif key == "KEY_BACK":
-                    # Возврат в предыдущее меню
-                    self.menu_manager.go_back()
-                    break
+            # Передаем управление MenuManager
+            # Не нужно ничего делать, MenuManager обработает навигацию и выбор
+            
         except Exception as e:
             error_msg = f"Ошибка при показе меню выбора аудио устройства: {e}"
             print(error_msg)

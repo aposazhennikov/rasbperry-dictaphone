@@ -98,8 +98,21 @@ class AudioRecorder:
             device (dict): Словарь с информацией об устройстве
         """
         try:
-            self.audio_device = device
+            if self.debug:
+                device_name = device.get("name", "Неизвестное устройство")
+                if device.get("is_built_in", False) or "USB Composite Device" in device_name:
+                    device_name = "Встроенный микрофон в пульте"
+                print(f"Устанавливаем устройство записи: {device_name}")
+            
+            # Создаем копию устройства для избежания проблем с изменением исходного объекта
+            self.audio_device = device.copy() if device else None
+            
+            # Если запись активна и на паузе, нужно будет перезапустить стрим при возобновлении
+            if self.is_recording and self.is_paused:
+                self.need_reset_stream = True
         except Exception as e:
+            error_msg = f"Ошибка при установке устройства для записи: {e}"
+            print(error_msg)
             sentry_sdk.capture_exception(e)
     
     def start_recording(self, folder):
@@ -194,23 +207,48 @@ class AudioRecorder:
         Определяет поддерживаемую устройством частоту дискретизации
         
         Args:
-            device_id (str): Идентификатор устройства
+            device_id (str или int): Идентификатор устройства
             
         Returns:
             int: Поддерживаемая частота дискретизации
         """
         try:
-            # Пробуем получить информацию об устройстве
-            device_info = sd.query_devices(device_id, 'input')
-            if self.debug:
-                print(f"Информация об устройстве: {device_info}")
+            # Импортируем sounddevice в начале функции, чтобы он был доступен во всей функции
+            import sounddevice as sd
             
-            # Проверяем, есть ли информация о поддерживаемых частотах
-            if 'default_samplerate' in device_info:
-                default_rate = int(device_info['default_samplerate'])
+            # Если device_id - числовой индекс sounddevice
+            if isinstance(device_id, int) or (isinstance(device_id, str) and device_id.isdigit()):
+                try:
+                    device_info = sd.query_devices(int(device_id))
+                    if self.debug:
+                        print(f"Информация об устройстве (по индексу {device_id}): {device_info}")
+                    
+                    if 'default_samplerate' in device_info:
+                        default_rate = int(device_info['default_samplerate'])
+                        if self.debug:
+                            print(f"Используем стандартную частоту устройства: {default_rate} Гц")
+                        return default_rate
+                except Exception as sd_error:
+                    if self.debug:
+                        print(f"Ошибка при получении информации по индексу {device_id}: {sd_error}")
+                    # Продолжаем с другими методами
+            
+            # Пробуем получить информацию об устройстве
+            try:
+                device_info = sd.query_devices(device_id, 'input')
                 if self.debug:
-                    print(f"Используем стандартную частоту устройства: {default_rate} Гц")
-                return default_rate
+                    print(f"Информация об устройстве: {device_info}")
+                
+                # Проверяем, есть ли информация о поддерживаемых частотах
+                if 'default_samplerate' in device_info:
+                    default_rate = int(device_info['default_samplerate'])
+                    if self.debug:
+                        print(f"Используем стандартную частоту устройства: {default_rate} Гц")
+                    return default_rate
+            except Exception as e:
+                if self.debug:
+                    print(f"Ошибка при получении информации об устройстве {device_id}: {e}")
+                # Продолжаем с перебором стандартных частот
             
             # Если нет информации, пробуем стандартные частоты
             for rate in self.STANDARD_RATES:
@@ -228,20 +266,37 @@ class AudioRecorder:
                         print(f"Частота {rate} Гц не поддерживается: {e}")
                     continue
             
-            # Если ни одна из стандартных частот не подходит, возвращаем минимальную
+            # Если устройство - None, значит используется устройство по умолчанию
+            if device_id is None:
+                try:
+                    # Получаем устройство по умолчанию и его частоту
+                    device_info = sd.query_devices(kind='input')
+                    if 'default_samplerate' in device_info:
+                        default_rate = int(device_info['default_samplerate'])
+                        if self.debug:
+                            print(f"Используем частоту устройства по умолчанию: {default_rate} Гц")
+                        return default_rate
+                except Exception as default_error:
+                    if self.debug:
+                        print(f"Ошибка при получении частоты устройства по умолчанию: {default_error}")
+            
+            # Если всё не сработало, используем стандартную частоту
             if self.debug:
-                print(f"Ни одна из стандартных частот не поддерживается, используем 8000 Гц")
-            return 8000
+                print(f"Используем стандартную частоту 44100 Гц")
+            return 44100
         except Exception as e:
             error_msg = f"Ошибка при определении поддерживаемой частоты: {e}"
             print(error_msg)
             sentry_sdk.capture_exception(e)
-            # В случае ошибки используем самую низкую стандартную частоту
-            return 8000
+            # В случае ошибки используем самую распространенную частоту
+            return 44100
     
     def _record_audio(self):
         """Записывает аудио в отдельном потоке"""
         try:
+            # Импортируем sounddevice в начале функции, чтобы он был доступен во всей функции
+            import sounddevice as sd
+            
             def callback(indata, frames, time, status):
                 if not self.is_paused and self.is_recording:
                     try:
@@ -249,88 +304,183 @@ class AudioRecorder:
                     except Exception as e:
                         sentry_sdk.capture_exception(e)
             
-            # Подготавливаем параметры устройства для записи
-            device_params = {}
-            sample_rate = self.RATE
+            # Определяем параметры устройства
+            device_id = None
+            device_name = None
             
-            # ПРИНУДИТЕЛЬНОЕ ИСПОЛЬЗОВАНИЕ USB МИКРОФОНА
-            if self.audio_device and not self.audio_device.get("is_built_in", True):
-                try:
-                    import sounddevice as sd
-                    
-                    # Вариант 1: Пробуем использовать sd_index
-                    if "sd_index" in self.audio_device and self.audio_device["sd_index"] is not None:
-                        sd_index = self.audio_device["sd_index"]
-                        device_info = sd.query_devices(sd_index)
-                        if device_info and device_info['max_input_channels'] > 0:
-                            device_params["device"] = sd_index
-                            sample_rate = int(device_info.get("default_samplerate", self.RATE))
-                    
-                    # Вариант 2: Если sd_index нет или не работает, ищем по имени
-                    if "device" not in device_params:
-                        for i, device in enumerate(sd.query_devices()):
-                            if device['max_input_channels'] > 0 and (
-                                "USB" in device['name'] or 
-                                (self.audio_device.get('name') and self.audio_device['name'] in device['name'])
-                            ):
-                                device_params["device"] = i
-                                sample_rate = int(device.get("default_samplerate", self.RATE))
-                                break
-                    
-                    # Вариант 3: Если предыдущие не сработали, используем ALSA hw путь
-                    if "device" not in device_params:
-                        try:
-                            card_num = self.audio_device['card']
-                            device_num = self.audio_device['device']
-                            device_id = f"hw:{card_num},{device_num}"
-                            device_params["device"] = device_id
-                        except Exception:
-                            pass
-                            
-                except Exception:
-                    # Если все попытки не удались, используем ALSA hw путь
+            # Если указано устройство, определяем его ID для sounddevice
+            if self.audio_device:
+                # Проверяем, есть ли sd_index в устройстве
+                if "sd_index" in self.audio_device and self.audio_device["sd_index"] is not None:
+                    device_id = self.audio_device["sd_index"]
+                    if self.debug:
+                        print(f"Используем индекс sounddevice: {device_id}")
+                else:
+                    # Пробуем найти устройство по имени с помощью sounddevice
                     try:
-                        card_num = self.audio_device['card']
-                        device_num = self.audio_device['device']
-                        device_id = f"hw:{card_num},{device_num}"
-                        device_params["device"] = device_id
-                    except Exception:
-                        pass
-            # Для встроенного микрофона
-            elif self.audio_device:
-                try:
-                    device_id = f"hw:{self.audio_device['card']},{self.audio_device['device']}"
-                    device_params["device"] = device_id
-                except Exception:
-                    pass
-            
-            # Запускаем поток записи
-            with sd.InputStream(samplerate=sample_rate, channels=self.CHANNELS, callback=callback, **device_params):
-                # Продолжаем запись пока флаг is_recording установлен
-                while self.is_recording:
-                    time.sleep(0.1)
-            
-            # Сохраняем запись при необходимости
-            if self.save_and_stop:
-                try:
-                    if self.audio_data and len(self.audio_data) > 0:
-                        audio_data_concat = np.concatenate(self.audio_data)
-                        sf.write(self.output_file, audio_data_concat, sample_rate)
+                        device_list = sd.query_devices()
+                        device_name = self.audio_device.get("name", "")
+                        card_num = self.audio_device.get("card")
+                        is_built_in = self.audio_device.get("is_built_in", False)
                         
-                        # Проверяем, что файл создан
-                        if os.path.exists(self.output_file):
-                            return self.output_file
-                        else:
-                            return None
+                        # Для внешних USB устройств ищем по фрагментам имени
+                        if not is_built_in and "USB" in device_name.upper():
+                            for i, device in enumerate(device_list):
+                                if (device['max_input_channels'] > 0 and 
+                                    ("USB" in device['name'].upper()) and
+                                    (device_name in device['name'] or 
+                                     any(keyword in device['name'] for keyword in ["LCS", "USB Audio Device"]))):
+                                    device_id = i
+                                    if self.debug:
+                                        print(f"Найдено USB устройство по имени: {device['name']}, индекс: {i}")
+                                    break
+                        
+                        # Для встроенного микрофона ищем по ключевым словам
+                        if (is_built_in or "USB Composite Device" in device_name) and device_id is None:
+                            # Если это встроенный микрофон, ищем устройство с "USB Composite Device" или первое доступное
+                            for i, device in enumerate(device_list):
+                                if device['max_input_channels'] > 0:
+                                    if "USB Composite Device" in device['name'] or "USB Audio" in device['name']:
+                                        device_id = i
+                                        if self.debug:
+                                            print(f"Найден встроенный микрофон: {device['name']}, индекс: {i}")
+                                        break
+                    except Exception as find_error:
+                        if self.debug:
+                            print(f"Ошибка при поиске устройства по имени: {find_error}")
+                        sentry_sdk.capture_exception(find_error)
+                    
+                    # Если всё ещё не найдено, используем формат ALSA
+                    if device_id is None:
+                        device_id = f"hw:{self.audio_device['card']},{self.audio_device['device']}"
+                        if self.debug:
+                            print(f"Используем ALSA устройство: {device_id}")
+                
+                # Сохраняем имя устройства для логов
+                device_name = self.audio_device.get("name", "Неизвестное устройство")
+                if self.audio_device.get("is_built_in", False) or "USB Composite Device" in device_name:
+                    device_name = "Встроенный микрофон в пульте"
+                elif "USB" in device_name:
+                    if "(LCS)" in device_name:
+                        device_name = "Внешний USB микрофон (LCS)"
                     else:
-                        return None
-                except Exception as e:
-                    sentry_sdk.capture_exception(e)
-                    return None
-            return None
+                        device_name = f"USB микрофон ({device_name})"
+            
+            if self.debug:
+                print(f"Выбранное устройство для записи: {device_name}, ID: {device_id}")
+                print(f"Текущий статус: recording={self.is_recording}, paused={self.is_paused}")
+            
+            # Если мы перезапускаем стрим из-за смены устройства во время паузы,
+            # автоматически снимаем флаг паузы
+            was_paused = self.is_paused
+            if was_paused and hasattr(self, 'need_reset_stream') and self.need_reset_stream:
+                if self.debug:
+                    print("Автоматическое снятие флага паузы после перезапуска стрима")
+                self.is_paused = False
+            
+            # Определяем поддерживаемую частоту дискретизации
+            sample_rate = self._get_supported_sample_rate(device_id)
+            
+            if self.debug:
+                print(f"Начинаем запись аудио с устройства {device_name} (ID: {device_id}) с частотой {sample_rate} Гц")
+            
+            # Пробуем создать стрим с указанными параметрами
+            try:
+                # Настраиваем sounddevice
+                self.stream = sd.InputStream(
+                    samplerate=sample_rate,
+                    channels=self.CHANNELS,
+                    callback=callback,
+                    device=device_id
+                )
+                
+                # Запускаем стрим
+                with self.stream:
+                    if self.debug:
+                        print("Стрим запущен успешно")
+                        
+                    # Устанавливаем текущую частоту дискретизации
+                    self.RATE = sample_rate
+                    
+                    # Если мы перезапустили стрим во время паузы и автоматически сняли эту паузу,
+                    # возвращаем флаг паузы обратно, чтобы пользователь мог продолжить с этого состояния
+                    if was_paused:
+                        if self.debug:
+                            print("Восстановление флага паузы после инициализации стрима")
+                        self.is_paused = True
+                    
+                    # Ждем, пока запись не будет остановлена или установлен флаг save_and_stop
+                    while self.is_recording and not self.save_and_stop:
+                        time.sleep(0.1)
+                    
+                    # Если установлен флаг save_and_stop, сохраняем запись и выходим
+                    if self.save_and_stop:
+                        if self.debug:
+                            print("Завершаем запись и сохраняем файл")
+                            
+                        self._save_recording()
+                        
+                        # Сбрасываем флаги
+                        self.is_recording = False
+                        self.is_paused = False
+                        self.save_and_stop = False
+            except Exception as stream_error:
+                error_msg = f"Ошибка при создании стрима для записи: {stream_error}"
+                print(error_msg)
+                sentry_sdk.capture_exception(stream_error)
+                
+                # Пробуем с устройством по умолчанию
+                try:
+                    if self.debug:
+                        print("Пробуем использовать устройство по умолчанию")
+                    
+                    # Создаем стрим с устройством по умолчанию
+                    self.stream = sd.InputStream(
+                        samplerate=sample_rate,
+                        channels=self.CHANNELS,
+                        callback=callback
+                    )
+                    
+                    # Запускаем стрим
+                    with self.stream:
+                        if self.debug:
+                            print("Стрим с устройством по умолчанию запущен")
+                            
+                        # Устанавливаем текущую частоту дискретизации
+                        self.RATE = sample_rate
+                        
+                        # Ждем, пока запись не будет остановлена или установлен флаг save_and_stop
+                        while self.is_recording and not self.save_and_stop:
+                            time.sleep(0.1)
+                        
+                        # Если установлен флаг save_and_stop, сохраняем запись и выходим
+                        if self.save_and_stop:
+                            if self.debug:
+                                print("Завершаем запись и сохраняем файл")
+                                
+                            self._save_recording()
+                            
+                            # Сбрасываем флаги
+                            self.is_recording = False
+                            self.is_paused = False
+                            self.save_and_stop = False
+                except Exception as default_stream_error:
+                    error_msg = f"Ошибка при создании стрима с устройством по умолчанию: {default_stream_error}"
+                    print(error_msg)
+                    sentry_sdk.capture_exception(default_stream_error)
+                    
+                    # Уведомляем о проблеме
+                    self.is_recording = False
+                    self.is_paused = False
+                
         except Exception as e:
+            error_msg = f"Критическая ошибка в потоке записи: {e}"
+            print(error_msg)
             sentry_sdk.capture_exception(e)
-            return None
+            
+            # Сбрасываем флаги записи в случае ошибки
+            self.is_recording = False
+            self.is_paused = False
     
     def pause_recording(self):
         """
@@ -355,26 +505,72 @@ class AudioRecorder:
     
     def resume_recording(self):
         """
-        Возобновляет запись после паузы
+        Возобновляет приостановленную запись
         
         Returns:
-            bool: True, если запись успешно возобновлена, иначе False
+            bool: True если запись успешно возобновлена, False в противном случае
         """
         with self.lock:
             if not self.is_recording or not self.is_paused:
                 return False
-                
+            
             try:
-                # Обновляем общее время паузы
-                if self.pause_start_time:
-                    self.total_pause_time += time.time() - self.pause_start_time
-                    self.pause_start_time = None
+                # Если нужно перезапустить стрим из-за смены устройства
+                need_reset = getattr(self, 'need_reset_stream', False)
                 
-                # Снимаем флаг паузы
-                self.is_paused = False
-                
-                return True
+                if need_reset:
+                    if self.debug:
+                        print("Перезапускаем стрим из-за смены устройства")
+                    
+                    # Останавливаем текущий стрим, если он существует
+                    if self.stream:
+                        try:
+                            self.stream.stop()
+                            self.stream.close()
+                        except Exception as stop_error:
+                            if self.debug:
+                                print(f"Ошибка при остановке стрима: {stop_error}")
+                            # Продолжаем даже при ошибке
+                    
+                    # Проверяем, что аудио устройство установлено
+                    if not self.audio_device:
+                        if self.debug:
+                            print("Аудио устройство не установлено, используем устройство по умолчанию")
+                        # Можно установить устройство по умолчанию или вернуть ошибку
+                    
+                    # Создаем новый поток записи
+                    self.recording_thread = threading.Thread(target=self._record_audio)
+                    self.recording_thread.daemon = True
+                    self.recording_thread.start()
+                    
+                    # Сбрасываем флаг перезапуска
+                    self.need_reset_stream = False
+                    
+                    # Поскольку поток записи теперь перезапущен,
+                    # не нужно снимать флаг паузы здесь, это сделает _record_audio
+                    
+                    # Рассчитываем время на паузе
+                    if self.pause_start_time:
+                        pause_time = time.time() - self.pause_start_time
+                        self.total_pause_time += pause_time
+                        self.pause_start_time = None
+                    
+                    # Просто возвращаем успех, actual unpausing будет выполнено в новом потоке
+                    return True
+                else:
+                    # Стандартное возобновление записи
+                    # Рассчитываем время на паузе
+                    if self.pause_start_time:
+                        pause_time = time.time() - self.pause_start_time
+                        self.total_pause_time += pause_time
+                        self.pause_start_time = None
+                    
+                    self.is_paused = False
+                    
+                    return True
             except Exception as e:
+                error_msg = f"Ошибка при возобновлении записи: {e}"
+                print(error_msg)
                 sentry_sdk.capture_exception(e)
                 return False
     
@@ -528,4 +724,36 @@ class AudioRecorder:
         Returns:
             str: Имя папки или None, если запись не активна
         """
-        return self.current_folder if self.is_recording else None 
+        return self.current_folder if self.is_recording else None
+    
+    def _save_recording(self):
+        """Сохраняет записанные данные в файл"""
+        try:
+            if not self.audio_data or len(self.audio_data) == 0:
+                if self.debug:
+                    print("Нет данных для сохранения")
+                return None
+            
+            if self.debug:
+                print(f"Сохраняем запись в файл: {self.output_file}")
+            
+            # Объединяем все части записи
+            audio_data_concat = np.concatenate(self.audio_data)
+            
+            # Сохраняем в файл с текущей частотой дискретизации
+            sf.write(self.output_file, audio_data_concat, self.RATE)
+            
+            # Проверяем, что файл создан
+            if os.path.exists(self.output_file):
+                if self.debug:
+                    print(f"Запись успешно сохранена: {self.output_file}")
+                return self.output_file
+            else:
+                if self.debug:
+                    print(f"Ошибка: файл не был создан")
+                return None
+        except Exception as e:
+            error_msg = f"Ошибка при сохранении записи: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return None 

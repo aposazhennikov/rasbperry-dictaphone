@@ -183,7 +183,9 @@ class AudioDeviceManager:
                             "sample_rate": device.get('default_samplerate', 44100)
                         })
             except Exception as sd_error:
-                pass
+                sentry_sdk.capture_exception(sd_error)
+                if self.debug:
+                    print(f"Ошибка при получении устройств через sounddevice: {sd_error}")
             
             # Получаем список устройств через arecord -l
             result = subprocess.run(["arecord", "-l"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -192,7 +194,9 @@ class AudioDeviceManager:
                 # Если не удалось получить устройства через arecord, но есть устройства от sounddevice
                 if sd_devices:
                     for i, device in enumerate(sd_devices):
-                        if "USB" in device['name'].upper():
+                        # Пропускаем устройства без "USB" в названии (кроме встроенного)
+                        # и пропускаем устройства с "UACDemoV10" в названии (динамики)
+                        if ("USB" in device['name'].upper() and "UACDEMOV10" not in device['name'].upper()):
                             # Добавляем USB-устройство из sounddevice
                             usb_device = {
                                 "card": i,  # Используем индекс как номер карты
@@ -244,7 +248,7 @@ class AudioDeviceManager:
                     if device_key in added_devices:
                         continue
                     
-                    # Проверяем, является ли это устройство встроенным микрофоном
+                    # Проверяем, является ли это устройство встроенным микрофоном в пульте
                     is_built_in = "USB Composite Device" in card_info
                     
                     # Проверяем, является ли это динамиком (не добавляем его в список)
@@ -261,7 +265,7 @@ class AudioDeviceManager:
                         # Если часть названия устройства содержится в названии sounddevice
                         # или название sounddevice содержится в названии устройства
                         if (device_name in sd_device['name'] or sd_device['name'] in device_name or
-                            ("USB" in device_name and "USB" in sd_device['name'])):
+                            ("USB" in device_name.upper() and "USB" in sd_device['name'].upper())):
                             sd_index = sd_device['index']
                             break
                     
@@ -281,6 +285,8 @@ class AudioDeviceManager:
             return devices
         except Exception as e:
             sentry_sdk.capture_exception(e)
+            if self.debug:
+                print(f"Ошибка при получении доступных устройств: {e}")
             # В случае ошибки возвращаем только встроенный микрофон
             return [self.default_device]
     
@@ -420,21 +426,31 @@ class AudioDeviceManager:
             bool: True если устройство доступно, иначе False
         """
         try:
-            # Получаем параметры выбранного устройства
-            selected_card = self.selected_device.get("card")
-            selected_device = self.selected_device.get("device")
-            
             # Встроенный микрофон всегда считается доступным
             if self.selected_device.get("is_built_in", False):
                 return True
                 
+            # Получаем параметры выбранного устройства
+            selected_card = self.selected_device.get("card")
+            selected_device = self.selected_device.get("device")
+            selected_name = self.selected_device.get("name", "")
+            
             # Проверяем наличие устройства в списке доступных
             for device in available_devices:
+                # Проверяем совпадение по card и device
                 if device.get("card") == selected_card and device.get("device") == selected_device:
                     return True
+                
+                # Дополнительно проверяем по имени, если есть USB в названии
+                if "USB" in selected_name.upper() and "USB" in device.get("name", "").upper():
+                    if (selected_name in device.get("name", "") or 
+                        device.get("name", "") in selected_name):
+                        return True
                     
             return False
         except Exception as e:
             sentry_sdk.capture_exception(e)
+            if self.debug:
+                print(f"Ошибка при проверке доступности устройства: {e}")
             # В случае ошибки предполагаем, что устройство недоступно
             return False 

@@ -697,20 +697,68 @@ class RecorderManager:
         """
         try:
             if self.debug:
-                print(f"Обновляем устройство записи в RecorderManager: {device}")
+                device_name = device.get("name", "Неизвестное устройство")
+                if device.get("is_built_in", False) or "USB Composite Device" in device_name:
+                    device_name = "Встроенный микрофон в пульте"
+                elif "USB" in device_name:
+                    if "(LCS)" in device_name:
+                        device_name = "Внешний USB микрофон (LCS)"
+                    else:
+                        device_name = f"USB микрофон ({device_name})"
+                print(f"Обновляем устройство записи в RecorderManager: {device_name}")
             
-            # Обновляем локальное устройство
-            self.audio_device = device
+            # Создаем копию устройства, чтобы избежать проблем с изменением исходного объекта
+            self.audio_device = device.copy() if device else None
+            
+            if not self.audio_device:
+                # Если устройство не указано, используем устройство по умолчанию (встроенный микрофон)
+                self.audio_device = self.audio_device_manager.default_device
+                if self.debug:
+                    print(f"Устройство не указано, используем устройство по умолчанию: {self.audio_device}")
+            
+            # Проверяем, активна ли запись и нужно ли перезапустить recorder
+            is_active_recording = self.recorder and self.recorder.is_active()
+            is_paused = is_active_recording and self.recorder.is_on_pause()
             
             # Если рекордер существует, обновляем устройство в нем
             if self.recorder:
                 if self.debug:
-                    print(f"Обновляем устройство в существующем рекордере")
-                self.recorder.set_audio_device(device)
+                    device_name = self.audio_device.get("name", "Неизвестное устройство")
+                    if self.audio_device.get("is_built_in", False):
+                        device_name = "Встроенный микрофон в пульте"
+                    print(f"Обновляем устройство в существующем рекордере: {device_name}")
+                    
+                    if is_active_recording:
+                        print(f"Запись активна: {is_active_recording}, на паузе: {is_paused}")
+                
+                # Обновляем устройство в рекордере
+                self.recorder.set_audio_device(self.audio_device)
+                
+                # Если запись активна и на паузе, обновляем флаг для перезапуска стрима при возобновлении
+                if is_active_recording and is_paused:
+                    if self.debug:
+                        print("Установлен флаг need_reset_stream для перезапуска стрима при возобновлении")
+            else:
+                # Если рекордер не существует, создаем новый с указанным устройством
+                if self.debug:
+                    print(f"Создаем новый экземпляр AudioRecorder с устройством: {self.audio_device}")
+                self.recorder = AudioRecorder(base_dir=self.base_dir, debug=self.debug, audio_device=self.audio_device)
+                self.recorder.set_timer_callback(self._timer_callback)
             
             # Проверяем, что устройство обновлено
             if self.debug:
-                print(f"Текущее устройство после обновления: {self.audio_device}")
+                device_name = self.audio_device.get("name", "Неизвестное устройство")
+                if self.audio_device.get("is_built_in", False):
+                    device_name = "Встроенный микрофон в пульте"
+                print(f"Текущее устройство после обновления: {device_name}")
+            
+            # Вызываем колбэк обновления, если он установлен
+            if self.update_callback and is_active_recording:
+                try:
+                    self.update_callback()
+                except Exception as callback_error:
+                    print(f"Ошибка при вызове колбэка обновления: {callback_error}")
+                    sentry_sdk.capture_exception(callback_error)
             
             return True
         except Exception as e:
@@ -728,45 +776,46 @@ class RecorderManager:
             new_device (dict): Новое устройство (обычно встроенный микрофон)
         """
         try:
+            # Определяем имена устройств для отображения и озвучивания
+            old_device_name = old_device.get("name", "Неизвестное устройство")
+            if old_device.get("is_built_in", False) or "USB Composite Device" in old_device_name:
+                old_device_name = "Встроенный микрофон в пульте"
+            elif "USB" in old_device_name:
+                if "(LCS)" in old_device_name:
+                    old_device_name = "Внешний USB микрофон"
+                else:
+                    old_device_name = "USB микрофон"
+            
+            new_device_name = new_device.get("name", "Неизвестное устройство")
+            if new_device.get("is_built_in", False) or "USB Composite Device" in new_device_name:
+                new_device_name = "Встроенный микрофон в пульте"
+            
             if self.debug:
-                print(f"Обработка отключения устройства: {old_device['name']} -> {new_device['name']}")
+                print(f"Обработка отключения устройства: {old_device_name} -> {new_device_name}")
             
             # Проверяем, ведется ли запись
             if not self.recorder or not self.recorder.is_active():
                 if self.debug:
                     print("Нет активной записи, просто обновляем устройство")
-                # Обновляем устройство в локальном объекте
-                self.audio_device = new_device
-                # Обновляем устройство в рекордере, если он существует
-                if self.recorder:
-                    self.recorder.set_audio_device(new_device)
+                # Обновляем устройство через метод update_audio_device
+                self.update_audio_device(new_device)
                 return
             
             # Если запись уже приостановлена, просто обновляем устройство
             if self.recorder.is_on_pause():
                 if self.debug:
                     print("Запись уже на паузе, просто обновляем устройство")
-                # Обновляем устройство в локальном объекте
-                self.audio_device = new_device
-                # Обновляем устройство в рекордере
-                self.recorder.set_audio_device(new_device)
+                # Обновляем устройство через метод update_audio_device
+                self.update_audio_device(new_device)
                 return
-            
-            # Запоминаем имя устройства для озвучивания
-            old_device_name = "USB микрофон"
-            if old_device.get("is_built_in", False):
-                old_device_name = "Встроенный микрофон в пульте"
             
             # Ставим запись на паузу
             if self.debug:
                 print("Ставим запись на паузу из-за отключения устройства")
             self.recorder.pause_recording()
             
-            # Обновляем устройство в локальном объекте
-            self.audio_device = new_device
-            
-            # Обновляем устройство в рекордере
-            self.recorder.set_audio_device(new_device)
+            # Обновляем устройство через метод update_audio_device
+            self.update_audio_device(new_device)
             
             # Обновляем UI
             if self.update_callback:

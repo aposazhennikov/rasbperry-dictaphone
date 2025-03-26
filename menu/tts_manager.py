@@ -675,8 +675,27 @@ class TTSManager:
             
         if self.current_sound_process and self.current_sound_process.poll() is None:
             try:
+                # Сначала пробуем вежливое завершение через terminate
                 self.current_sound_process.terminate()
-                self.current_sound_process.wait()
+                
+                # Ждем короткое время для завершения
+                start_time = time.time()
+                while self.current_sound_process.poll() is None and time.time() - start_time < 0.3:
+                    time.sleep(0.05)
+                
+                # Если процесс все еще жив, применяем kill
+                if self.current_sound_process.poll() is None:
+                    self.current_sound_process.kill()
+                    self.current_sound_process.wait()
+                
+                # Для надежности на Linux можно также использовать системные команды
+                if os.name == 'posix':
+                    try:
+                        # Завершаем все потенциальные аудиопроцессы
+                        os.system("pkill -9 aplay 2>/dev/null")
+                        os.system("pkill -9 mpg123 2>/dev/null")
+                    except:
+                        pass
             except:
                 pass
                 
