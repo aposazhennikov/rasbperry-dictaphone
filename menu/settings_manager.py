@@ -23,7 +23,13 @@ class SettingsManager:
                 "voice": "ru-RU-Standard-A",
                 "tts_engine": "gtts",
                 "google_cloud_credentials": None,
-                "system_volume": 100  # Добавляем настройку громкости по умолчанию
+                "system_volume": 100,  # Добавляем настройку громкости по умолчанию
+                "audio_device": {      # Добавляем настройку аудио устройства по умолчанию
+                    "card": 0,
+                    "device": 0,
+                    "name": "Встроенный микрофон в пульте",
+                    "is_built_in": True
+                }
             }
             
             # Создаем директорию для файла настроек, если её нет
@@ -335,6 +341,96 @@ class SettingsManager:
             
         except Exception as e:
             error_msg = f"Критическая ошибка при установке громкости в настройках: {e}"
+            print(f"[SETTINGS CRITICAL ERROR] {error_msg}")
+            sentry_sdk.capture_exception(e)
+            return False
+    
+    def get_audio_device(self):
+        """
+        Возвращает информацию о текущем аудио устройстве для записи
+        
+        Returns:
+            dict: Словарь с информацией об устройстве
+        """
+        try:
+            # Значение по умолчанию для устройства
+            default_device = {
+                "card": 0,
+                "device": 0,
+                "name": "Встроенный микрофон в пульте",
+                "is_built_in": True
+            }
+            
+            return self.settings.get("audio_device", default_device)
+        except Exception as e:
+            error_msg = f"Ошибка при получении аудио устройства: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            # В случае ошибки возвращаем устройство по умолчанию
+            return {
+                "card": 0,
+                "device": 0,
+                "name": "Встроенный микрофон в пульте",
+                "is_built_in": True
+            }
+    
+    def set_audio_device(self, device):
+        """
+        Устанавливает аудио устройство для записи
+        
+        Args:
+            device (dict): Словарь с информацией об устройстве
+            
+        Returns:
+            bool: True если успешно, иначе False
+        """
+        try:
+            # Логируем начало процесса
+            sentry_sdk.add_breadcrumb(
+                category="audio_device",
+                message=f"Settings Manager: Начало установки аудио устройства {device}",
+                level="info"
+            )
+            print(f"[SETTINGS] Запрос на установку аудио устройства: {device}")
+            
+            # Проверяем корректность значения
+            if not isinstance(device, dict) or "card" not in device or "device" not in device:
+                error_msg = f"Settings Manager: Некорректные данные аудио устройства: {device}"
+                print(f"[SETTINGS ERROR] {error_msg}")
+                sentry_sdk.capture_message(error_msg, level="error")
+                return False
+            
+            # Сохраняем текущее значение для возможного восстановления
+            old_device = self.get_audio_device()
+            
+            # Устанавливаем новое значение
+            self.settings["audio_device"] = device
+            
+            # Сохраняем настройки в файл
+            try:
+                self.save_settings()
+                print(f"[SETTINGS] Настройки сохранены в файл")
+            except Exception as save_error:
+                error_msg = f"Ошибка при сохранении настроек: {save_error}"
+                print(f"[SETTINGS ERROR] {error_msg}")
+                sentry_sdk.capture_exception(save_error)
+                # Восстанавливаем старое значение
+                self.settings["audio_device"] = old_device
+                return False
+            
+            print(f"[SETTINGS] Аудио устройство успешно установлено: {device}")
+            
+            # Логируем успешную установку устройства
+            sentry_sdk.add_breadcrumb(
+                category="audio_device",
+                message=f"Settings Manager: Аудио устройство успешно изменено с {old_device} на {device}",
+                level="info"
+            )
+            
+            return True
+            
+        except Exception as e:
+            error_msg = f"Критическая ошибка при установке аудио устройства в настройках: {e}"
             print(f"[SETTINGS CRITICAL ERROR] {error_msg}")
             sentry_sdk.capture_exception(e)
             return False 

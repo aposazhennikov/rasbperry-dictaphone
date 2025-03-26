@@ -858,4 +858,100 @@ class GoogleTTSManager:
             usage_info = self.get_usage_info()
             print(f"Использовано символов в этом месяце: {usage_info['monthly_chars_used']}")
             print(f"Осталось бесплатных символов: {usage_info['remaining_free_chars']}")
-            print(f"Общая стоимость: ${usage_info['estimated_cost']:.2f}") 
+            print(f"Общая стоимость: ${usage_info['estimated_cost']:.2f}")
+    
+    def set_credentials_file(self, credentials_file):
+        """
+        Устанавливает файл учетных данных для Google Cloud
+        
+        Args:
+            credentials_file (str): Путь к файлу учетных данных
+            
+        Returns:
+            bool: True если успешно, иначе False
+        """
+        try:
+            # Проверяем существование файла
+            if not os.path.exists(credentials_file):
+                error_msg = f"Google TTS Manager: Файл учетных данных не существует: {credentials_file}"
+                print(f"[GOOGLE TTS ERROR] {error_msg}")
+                sentry_sdk.capture_message(error_msg, level="error")
+                return False
+            
+            # Логируем операцию
+            sentry_sdk.add_breadcrumb(
+                category="google_cloud",
+                message=f"Google TTS Manager: Установка файла учетных данных: {credentials_file}",
+                level="info"
+            )
+            print(f"[GOOGLE TTS] Установка файла учетных данных: {credentials_file}")
+            
+            # Сохраняем старое значение для логирования
+            old_credentials_file = self.credentials_file
+            
+            # Обновляем путь к файлу учетных данных
+            self.credentials_file = os.path.abspath(credentials_file)
+            
+            # Устанавливаем переменную окружения для аутентификации Google Cloud
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = self.credentials_file
+            
+            # Загружаем информацию о проекте из файла учетных данных
+            try:
+                with open(self.credentials_file, 'r') as f:
+                    credentials_data = json.load(f)
+                    self.project_id = credentials_data.get("project_id")
+                    if self.debug:
+                        print(f"ID проекта Google Cloud: {self.project_id}")
+            except Exception as e:
+                print(f"Ошибка при загрузке информации о проекте: {e}")
+                sentry_sdk.capture_exception(e)
+                return False
+            
+            # Пересоздаем клиенты
+            try:
+                # Пересоздаем клиент TTS
+                self.client = texttospeech.TextToSpeechClient()
+                
+                # Если есть ID проекта, пересоздаем клиент мониторинга
+                if self.project_id:
+                    self.monitoring_client = monitoring_v3.MetricServiceClient()
+                    # Сбрасываем время последнего обновления метрик
+                    self.last_metrics_update = None
+                    # Обновляем метрики использования
+                    self._update_usage_metrics()
+                
+                print(f"[GOOGLE TTS] Клиенты успешно пересозданы с новыми учетными данными")
+            except Exception as e:
+                error_msg = f"Ошибка при пересоздании клиентов Google Cloud: {e}"
+                print(f"[GOOGLE TTS ERROR] {error_msg}")
+                sentry_sdk.capture_exception(e)
+                
+                # Восстанавливаем старое значение
+                self.credentials_file = old_credentials_file
+                os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = self.credentials_file
+                
+                # Пытаемся восстановить клиенты со старыми учетными данными
+                try:
+                    self.client = texttospeech.TextToSpeechClient()
+                    if self.project_id:
+                        self.monitoring_client = monitoring_v3.MetricServiceClient()
+                except:
+                    # Если не удалось восстановить, оставляем как есть
+                    pass
+                
+                return False
+            
+            # Логируем успешное обновление
+            sentry_sdk.add_breadcrumb(
+                category="google_cloud",
+                message=f"Google TTS Manager: Файл учетных данных успешно обновлен: {credentials_file}",
+                level="info"
+            )
+            print(f"[GOOGLE TTS] Файл учетных данных успешно обновлен: {credentials_file}")
+            
+            return True
+        except Exception as e:
+            error_msg = f"Критическая ошибка при установке файла учетных данных: {e}"
+            print(f"[GOOGLE TTS ERROR] {error_msg}")
+            sentry_sdk.capture_exception(e)
+            return False 

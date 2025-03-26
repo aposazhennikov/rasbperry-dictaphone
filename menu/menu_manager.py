@@ -16,6 +16,7 @@ from .menu_item import MenuItem, SubMenu, Menu
 from .external_storage_menu import ExternalStorageMenu
 from .base_menu import BaseMenu
 from .bulk_delete_manager import BulkDeleteManager
+from .audio_device_manager import AudioDeviceManager
 
 # Настройка логирования
 logger = logging.getLogger("menu_manager")
@@ -28,97 +29,148 @@ class MenuManager:
         Инициализация менеджера меню
         
         Args:
-            tts_enabled (bool): Включить озвучку
+            tts_enabled (bool): Включена ли озвучка
             cache_dir (str): Директория для кэширования звуков
             debug (bool): Режим отладки
             use_wav (bool): Использовать WAV вместо MP3
-            settings_manager: Менеджер настроек
-            records_dir (str): Директория для записей
+            settings_manager (SettingsManager): Менеджер настроек
+            records_dir (str): Директория для сохранения записей
         """
-        self.root_menu = None
-        self.current_menu = None
-        self.tts_enabled = tts_enabled
-        self.debug = debug
-        self.use_wav = use_wav
-        self.cache_dir = cache_dir
-        self.records_dir = records_dir
-        
-        # Флаг режима аудиоплеера - когда True, все команды идут в аудиоплеер, а не в меню
-        self.player_mode_active = False
-        
-        # Инициализация менеджера настроек
-        self.settings_manager = settings_manager
-        
-        # Инициализация менеджера синтеза речи
-        if tts_enabled:
-            self.tts_manager = TTSManager(
-                cache_dir=cache_dir,
-                debug=debug,
-                use_wav=use_wav,
-                settings_manager=settings_manager
+        try:
+            self.tts_enabled = tts_enabled
+            self.cache_dir = cache_dir
+            self.debug = debug
+            self.use_wav = use_wav
+            self.records_dir = records_dir
+            
+            # Создаем менеджер настроек, если он не передан
+            if not settings_manager:
+                from .settings_manager import SettingsManager
+                self.settings_manager = SettingsManager(
+                    settings_file=os.path.join(cache_dir, "settings.json"),
+                    debug=debug
+                )
+            else:
+                self.settings_manager = settings_manager
+                
+            # Создаем менеджер аудио устройств
+            from .audio_device_manager import AudioDeviceManager
+            self.audio_device_manager = AudioDeviceManager(
+                settings_file=os.path.join(cache_dir, "settings.json"),
+                debug=debug
             )
-        else:
-            self.tts_manager = None
-        
-        # Инициализация менеджера записи
-        self.recorder_manager = RecorderManager(
-            tts_manager=self.tts_manager,
-            base_dir=self.records_dir,
-            debug=self.debug
-        )
-        
-        # Инициализация менеджера воспроизведения
-        self.playback_manager = PlaybackManager(
-            tts_manager=self.tts_manager,
-            base_dir=self.records_dir,
-            debug=self.debug
-        )
-        
-        # Инициализация менеджера массового удаления
-        self.bulk_delete_manager = BulkDeleteManager(
-            menu_manager=self,
-            records_dir=self.records_dir,
-            debug=self.debug
-        )
-        
-        # Состояние записи
-        self.recording_state = {
-            "active": False,
-            "paused": False,
-            "folder": None,
-            "elapsed_time": 0,
-            "formatted_time": "00:00",
-            "max_duration_handled": False
-        }
-        
-        # Состояние воспроизведения
-        self.playback_state = {
-            "active": False,
-            "paused": False,
-            "folder": None,
-            "current_file": None,
-            "position": "00:00",
-            "duration": "00:00",
-            "progress": 0
-        }
-        
-        # Регистрируем обратный вызов для обновления информации о записи
-        self.recorder_manager.set_update_callback(self._update_recording_info)
-        
-        # Регистрируем обратный вызов для обновления информации о воспроизведении
-        self.playback_manager.set_update_callback(self._update_playback_info)
-        
-        # Инициализация менеджера отображения
-        self.display_manager = DisplayManager(self)
-        
-        # Меню, из которого был запущен аудиоплеер (для возврата по KEY_BACK)
-        self.source_menu = None
-        
-        # Флаг для предотвращения двойного озвучивания громкости
-        self._volume_announced = False
-        
-        # Создаем структуру меню
-        self.create_menu_structure()
+            # Получаем текущее выбранное устройство
+            self.audio_device = self.audio_device_manager.get_selected_device()
+            
+            if self.debug:
+                print(f"Выбранное устройство записи: {self.audio_device}")
+            
+            # Создаем TTS менеджер
+            if tts_enabled:
+                from .tts_manager import TTSManager
+                self.tts_manager = TTSManager(
+                    cache_dir=cache_dir,
+                    debug=debug,
+                    use_wav=use_wav,
+                    settings_manager=self.settings_manager
+                )
+                
+                # Получаем текущий голос из настроек
+                if self.settings_manager:
+                    voice = self.settings_manager.get_voice()
+                    engine = self.settings_manager.get_tts_engine()
+                    credentials = self.settings_manager.get_google_cloud_credentials()
+                    
+                    if self.debug:
+                        print(f"Текущий голос в настройках: {voice}")
+                        print(f"Текущий движок TTS в настройках: {engine}")
+                        print(f"Файл с учетными данными Google Cloud: {credentials}")
+                    
+                    # Устанавливаем параметры TTS
+                    if engine:
+                        self.tts_manager.set_tts_engine(engine)
+                    if voice:
+                        self.tts_manager.set_voice(voice)
+                    if engine == "google_cloud" and credentials:
+                        self.tts_manager.set_google_cloud_credentials(credentials)
+                        
+            # Создаем менеджер дисплея
+            from .display_manager import DisplayManager
+            self.display_manager = DisplayManager(menu_manager=self)
+            
+            # Создаем корневое меню
+            self.root_menu = None
+            self.current_menu = None
+            
+            # Создаем менеджер для записи и воспроизведения
+            # Передаем выбранное устройство в менеджер записи
+            from .recorder_manager import RecorderManager
+            self.recorder_manager = RecorderManager(
+                tts_manager=self.tts_manager,
+                base_dir=records_dir,
+                debug=debug
+            )
+            
+            # Создаем менеджер воспроизведения
+            from .playback_manager import PlaybackManager
+            self.playback_manager = PlaybackManager(
+                tts_manager=self.tts_manager,
+                base_dir=records_dir,
+                debug=debug
+            )
+            
+            # Создаем менеджер для внешних USB-накопителей
+            from .external_storage_menu import ExternalStorageMenu
+            self.external_storage_menu = ExternalStorageMenu(
+                settings_manager=self.settings_manager,
+                debug=debug,
+                menu_manager=self  # Передаем ссылку на себя
+            )
+            
+            # Состояние записи
+            self.recording_state = {
+                "active": False,
+                "paused": False,
+                "folder": None,
+                "elapsed_time": 0,
+                "formatted_time": "00:00",
+                "max_duration_handled": False
+            }
+            
+            # Состояние воспроизведения
+            self.playback_state = {
+                "active": False,
+                "paused": False,
+                "folder": None,
+                "current_file": None,
+                "current_index": 0,
+                "total_files": 0,
+                "elapsed_time": 0,
+                "total_time": 0,
+                "formatted_time": "00:00 / 00:00",
+                "volume": 100,
+            }
+            
+            # Флаг активности режима аудиоплеера
+            self.player_mode_active = False
+            
+            # Устанавливаем обработчики обновления
+            self.recorder_manager.set_update_callback(self._update_recording_info)
+            self.playback_manager.set_update_callback(self._update_playback_info)
+            
+            # Создаем структуру меню
+            self.create_menu_structure()
+            
+            # Отображаем текущее меню
+            self.display_current_menu()
+            
+            if self.debug:
+                print("MenuManager инициализирован успешно")
+        except Exception as e:
+            error_msg = f"Ошибка при инициализации MenuManager: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            raise
     
     def set_root_menu(self, menu):
         """
@@ -543,19 +595,22 @@ class MenuManager:
         try:
             # Проверяем подключенные USB-устройства
             if hasattr(self, 'external_storage_menu') and self.external_storage_menu:
-                mounted_devices = self.external_storage_menu.get_mounted_devices()
-                for device_info in mounted_devices:
-                    mount_point = device_info.get('mount_point')
-                    if mount_point and os.path.exists(mount_point):
-                        # Получаем список аудиофайлов на флешке
-                        for root, dirs, files in os.walk(mount_point):
-                            for file in files:
-                                if file.endswith(('.wav', '.mp3')):
-                                    file_path = os.path.join(root, file)
-                                    # Получаем человекочитаемое название файла
-                                    if hasattr(self, 'playback_manager') and self.playback_manager:
-                                        readable_name = self.playback_manager.get_human_readable_filename(file_path)
-                                        speech_texts.add(readable_name)
+                # Вместо использования get_mounted_devices, используем _get_usb_menu_items,
+                # если этот метод доступен
+                if hasattr(self.external_storage_menu, '_get_usb_menu_items'):
+                    usb_menu_items = self.external_storage_menu._get_usb_menu_items()
+                    for device_info in usb_menu_items:
+                        mount_point = device_info.get('mount_point')
+                        if mount_point and os.path.exists(mount_point):
+                            # Получаем список аудиофайлов на флешке
+                            for root, dirs, files in os.walk(mount_point):
+                                for file in files:
+                                    if file.endswith(('.wav', '.mp3')):
+                                        file_path = os.path.join(root, file)
+                                        # Получаем человекочитаемое название файла
+                                        if hasattr(self, 'playback_manager') and self.playback_manager:
+                                            readable_name = self.playback_manager.get_human_readable_filename(file_path)
+                                            speech_texts.add(readable_name)
         except Exception as e:
             print(f"Ошибка при получении имен файлов с внешнего носителя: {e}")
             sentry_sdk.capture_exception(e)
@@ -897,6 +952,33 @@ class MenuManager:
             # Добавляем обработчик наведения курсора
             volume_item.on_focus = lambda lvl=level: self.preview_system_volume(lvl)
             volume_menu.add_item(volume_item)
+        
+        # - Подменю выбора устройства для записи
+        try:
+            # Импортируем класс меню выбора устройства
+            from .audio_device_menu import AudioDeviceMenu
+            
+            # Создаем меню выбора устройства
+            audio_device_menu = AudioDeviceMenu(
+                menu_manager=self,
+                tts_manager=self.tts_manager,
+                settings_manager=self.settings_manager,
+                debug=self.debug
+            )
+            
+            # Добавляем пункт меню для выбора устройства записи
+            settings_menu.add_item(MenuItem(
+                "Выбор внешнего устройства для записи",
+                lambda: audio_device_menu
+            ))
+            
+            if self.debug:
+                print("Добавлен пункт меню для выбора устройства записи")
+                
+        except Exception as e:
+            error_msg = f"Ошибка при создании меню выбора устройства записи: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
         
         # Устанавливаем главное меню как корневое
         self.set_root_menu(main_menu)
@@ -2761,6 +2843,30 @@ class MenuManager:
                                 speech_texts.add(readable_name)
         except Exception as e:
             print(f"Ошибка при получении имен файлов из папок диктофона: {e}")
+            sentry_sdk.capture_exception(e)
+        
+        # Попытка добавить имена файлов с подключенного внешнего носителя
+        try:
+            # Проверяем подключенные USB-устройства
+            if hasattr(self, 'external_storage_menu') and self.external_storage_menu:
+                # Вместо использования get_mounted_devices, используем _get_usb_menu_items,
+                # если этот метод доступен
+                if hasattr(self.external_storage_menu, '_get_usb_menu_items'):
+                    usb_menu_items = self.external_storage_menu._get_usb_menu_items()
+                    for device_info in usb_menu_items:
+                        mount_point = device_info.get('mount_point')
+                        if mount_point and os.path.exists(mount_point):
+                            # Получаем список аудиофайлов на флешке
+                            for root, dirs, files in os.walk(mount_point):
+                                for file in files:
+                                    if file.endswith(('.wav', '.mp3')):
+                                        file_path = os.path.join(root, file)
+                                        # Получаем человекочитаемое название файла
+                                        if hasattr(self, 'playback_manager') and self.playback_manager:
+                                            readable_name = self.playback_manager.get_human_readable_filename(file_path)
+                                            speech_texts.add(readable_name)
+        except Exception as e:
+            print(f"Ошибка при получении имен файлов с внешнего носителя: {e}")
             sentry_sdk.capture_exception(e)
         
         # Предварительно генерируем только отсутствующие звуки для всех голосов

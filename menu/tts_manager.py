@@ -822,3 +822,57 @@ class TTSManager:
             print(f"[TTS CACHE ERROR] {error_msg}")
             sentry_sdk.capture_exception(e)
             return None
+
+    def set_google_cloud_credentials(self, credentials_file):
+        """
+        Устанавливает файл учетных данных для Google Cloud TTS
+        
+        Args:
+            credentials_file (str): Путь к файлу учетных данных
+            
+        Returns:
+            bool: True если успешно, иначе False
+        """
+        try:
+            # Проверяем существование файла
+            if not os.path.exists(credentials_file):
+                error_msg = f"TTS Manager: Файл учетных данных не существует: {credentials_file}"
+                print(f"[TTS ERROR] {error_msg}")
+                sentry_sdk.capture_message(error_msg, level="error")
+                return False
+            
+            # Логируем операцию
+            sentry_sdk.add_breadcrumb(
+                category="google_cloud",
+                message=f"TTS Manager: Установка файла учетных данных: {credentials_file}",
+                level="info"
+            )
+            print(f"[TTS] Установка файла учетных данных Google Cloud: {credentials_file}")
+            
+            # Если Google TTS менеджер не инициализирован, инициализируем его
+            if not self.google_tts_manager:
+                # Сохраняем путь к файлу учетных данных во временную переменную
+                # чтобы _init_google_cloud_tts мог использовать его
+                if self.settings_manager:
+                    self.settings_manager.set_google_cloud_credentials(credentials_file)
+                
+                # Инициализируем Google Cloud TTS
+                self._init_google_cloud_tts()
+                
+                # Если инициализация не удалась, возвращаем False
+                if not self.google_tts_manager:
+                    return False
+            else:
+                # Если Google TTS менеджер уже инициализирован, обновляем учетные данные
+                self.google_tts_manager.set_credentials_file(credentials_file)
+                
+                # Обновляем настройку в settings_manager
+                if self.settings_manager:
+                    self.settings_manager.set_google_cloud_credentials(credentials_file)
+            
+            return True
+        except Exception as e:
+            error_msg = f"Ошибка при установке файла учетных данных Google Cloud: {e}"
+            print(f"[TTS ERROR] {error_msg}")
+            sentry_sdk.capture_exception(e)
+            return False

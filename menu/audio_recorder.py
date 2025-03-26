@@ -14,8 +14,11 @@ class AudioRecorder:
     """Класс для записи аудио с микрофона, использующий sounddevice"""
     
     # Константы для настроек записи
-    RATE = 44100
+    RATE = 44100  # Значение по умолчанию
     CHANNELS = 1
+    
+    # Список стандартных частот дискретизации в порядке предпочтения
+    STANDARD_RATES = [44100, 48000, 32000, 22050, 16000, 8000]
     
     # Максимальная длительность записи в секундах (3 часа)
     MAX_RECORDING_DURATION = 3 * 60 * 60
@@ -23,13 +26,14 @@ class AudioRecorder:
     # Минимальное требуемое свободное место в байтах (1 GB)
     MIN_FREE_SPACE = 1 * 1024 * 1024 * 1024
     
-    def __init__(self, base_dir="/home/aleks/records", debug=False):
+    def __init__(self, base_dir="/home/aleks/records", debug=False, audio_device=None):
         """
         Инициализация рекордера
         
         Args:
             base_dir (str): Базовая директория для сохранения записей
             debug (bool): Режим отладки
+            audio_device (dict): Информация об устройстве для записи
         """
         self.base_dir = base_dir
         self.debug = debug
@@ -47,12 +51,13 @@ class AudioRecorder:
         self.output_file = None
         self.stream = None
         self.recording_thread = None
+        self.save_and_stop = False  # Новый флаг для корректного сохранения при остановке
+        
+        # Устройство для записи
+        self.audio_device = audio_device
         
         # Создаем базовую директорию, если она не существует
         self._create_base_directories()
-        
-        if self.debug:
-            print("AudioRecorder инициализирован")
         
     def _create_base_directories(self):
         """Создает базовые директории для записей, если они не существуют"""
@@ -65,12 +70,7 @@ class AudioRecorder:
             for folder in standard_folders:
                 folder_path = os.path.join(self.base_dir, folder)
                 os.makedirs(folder_path, exist_ok=True)
-                
-            if self.debug:
-                print(f"Созданы базовые директории в {self.base_dir}")
         except Exception as e:
-            error_msg = f"Ошибка при создании базовых директорий: {e}"
-            print(error_msg)
             sentry_sdk.capture_exception(e)
     
     def check_disk_space(self):
@@ -84,42 +84,44 @@ class AudioRecorder:
             # Для Linux
             disk_usage = shutil.disk_usage('/')
             free_space = disk_usage.free
-            
-            if self.debug:
-                print(f"Свободное место на диске: {free_space / (1024*1024*1024):.2f} GB")
-                
             return free_space >= self.MIN_FREE_SPACE, free_space
         except Exception as e:
-            error_msg = f"Ошибка при проверке свободного места: {e}"
-            print(error_msg)
             sentry_sdk.capture_exception(e)
             # В случае ошибки считаем, что места достаточно
             return True, None
+    
+    def set_audio_device(self, device):
+        """
+        Устанавливает устройство для записи
+        
+        Args:
+            device (dict): Словарь с информацией об устройстве
+        """
+        try:
+            self.audio_device = device
+        except Exception as e:
+            sentry_sdk.capture_exception(e)
     
     def start_recording(self, folder):
         """
         Начинает запись аудио в указанную папку
         
         Args:
-            folder (str): Папка для сохранения записи (A, B или C)
+            folder (str): Папка для сохранения записи
             
         Returns:
             bool: True, если запись успешно начата, False в противном случае
         """
         with self.lock:
             if self.is_recording:
-                if self.debug:
-                    print("Запись уже идёт")
                 return False
             
             try:
                 # Проверяем наличие свободного места
                 has_space, free_space = self.check_disk_space()
                 if not has_space:
-                    warning_msg = f"Недостаточно свободного места на диске: {free_space / (1024*1024*1024):.2f} GB"
-                    print(warning_msg)
-                    # Если метод вернул False, обработчик должен отобразить предупреждение
-                    # но запись все равно начнем
+                    # Запись все равно начнем, обработчик сам отобразит предупреждение
+                    pass
                 
                 self.current_folder = folder
                 self.is_paused = False
@@ -130,9 +132,6 @@ class AudioRecorder:
                 filename = self._generate_filename()
                 folder_path = os.path.join(self.base_dir, folder)
                 self.output_file = os.path.join(folder_path, filename)
-                
-                if self.debug:
-                    print(f"Начинаем запись в файл: {self.output_file}")
                 
                 # Устанавливаем флаги записи
                 self.is_recording = True
@@ -154,13 +153,8 @@ class AudioRecorder:
                 self.duration_monitor_thread.daemon = True
                 self.duration_monitor_thread.start()
                 
-                if self.debug:
-                    print(f"Запись начата в папку {folder}")
-                
                 return True
             except Exception as e:
-                error_msg = f"Ошибка при начале записи: {e}"
-                print(error_msg)
                 sentry_sdk.capture_exception(e)
                 self._clean_up()
                 return False
@@ -173,9 +167,6 @@ class AudioRecorder:
                 
                 # Если превышена максимальная длительность записи
                 if elapsed_time >= self.MAX_RECORDING_DURATION:
-                    warning_msg = f"Достигнут максимальный порог записи {self.MAX_RECORDING_DURATION / 3600:.1f} часа"
-                    print(warning_msg)
-                    
                     # Останавливаем запись
                     self.auto_stop_recording()
                     break
@@ -183,8 +174,6 @@ class AudioRecorder:
                 # Проверяем каждую секунду
                 time.sleep(1)
         except Exception as e:
-            error_msg = f"Ошибка в мониторе длительности записи: {e}"
-            print(error_msg)
             sentry_sdk.capture_exception(e)
     
     def auto_stop_recording(self):
@@ -194,12 +183,61 @@ class AudioRecorder:
         Returns:
             str: Путь к сохраненному файлу или None в случае ошибки
         """
-        print("Автоматическая остановка записи из-за превышения максимальной длительности")
         # Используем существующий метод stop_recording, но в другом потоке
         threading.Thread(target=self.stop_recording).start()
         
         # Возвращаем None, так как путь будет возвращен в методе stop_recording
         return None
+    
+    def _get_supported_sample_rate(self, device_id):
+        """
+        Определяет поддерживаемую устройством частоту дискретизации
+        
+        Args:
+            device_id (str): Идентификатор устройства
+            
+        Returns:
+            int: Поддерживаемая частота дискретизации
+        """
+        try:
+            # Пробуем получить информацию об устройстве
+            device_info = sd.query_devices(device_id, 'input')
+            if self.debug:
+                print(f"Информация об устройстве: {device_info}")
+            
+            # Проверяем, есть ли информация о поддерживаемых частотах
+            if 'default_samplerate' in device_info:
+                default_rate = int(device_info['default_samplerate'])
+                if self.debug:
+                    print(f"Используем стандартную частоту устройства: {default_rate} Гц")
+                return default_rate
+            
+            # Если нет информации, пробуем стандартные частоты
+            for rate in self.STANDARD_RATES:
+                try:
+                    if self.debug:
+                        print(f"Пробуем частоту дискретизации: {rate} Гц")
+                    # Проверяем работоспособность частоты, открывая тестовый стрим
+                    test_stream = sd.InputStream(samplerate=rate, channels=self.CHANNELS, device=device_id)
+                    test_stream.close()
+                    if self.debug:
+                        print(f"Частота {rate} Гц поддерживается устройством")
+                    return rate
+                except Exception as e:
+                    if self.debug:
+                        print(f"Частота {rate} Гц не поддерживается: {e}")
+                    continue
+            
+            # Если ни одна из стандартных частот не подходит, возвращаем минимальную
+            if self.debug:
+                print(f"Ни одна из стандартных частот не поддерживается, используем 8000 Гц")
+            return 8000
+        except Exception as e:
+            error_msg = f"Ошибка при определении поддерживаемой частоты: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            # В случае ошибки используем самую низкую стандартную частоту
+            return 8000
     
     def _record_audio(self):
         """Записывает аудио в отдельном потоке"""
@@ -208,26 +246,91 @@ class AudioRecorder:
                 if not self.is_paused and self.is_recording:
                     try:
                         self.audio_data.append(indata.copy())
-                        if status and self.debug:
-                            print(f"Статус записи: {status}")
                     except Exception as e:
-                        error_msg = f"Ошибка при сохранении аудиоданных: {e}"
-                        print(error_msg)
                         sentry_sdk.capture_exception(e)
             
+            # Подготавливаем параметры устройства для записи
+            device_params = {}
+            sample_rate = self.RATE
+            
+            # ПРИНУДИТЕЛЬНОЕ ИСПОЛЬЗОВАНИЕ USB МИКРОФОНА
+            if self.audio_device and not self.audio_device.get("is_built_in", True):
+                try:
+                    import sounddevice as sd
+                    
+                    # Вариант 1: Пробуем использовать sd_index
+                    if "sd_index" in self.audio_device and self.audio_device["sd_index"] is not None:
+                        sd_index = self.audio_device["sd_index"]
+                        device_info = sd.query_devices(sd_index)
+                        if device_info and device_info['max_input_channels'] > 0:
+                            device_params["device"] = sd_index
+                            sample_rate = int(device_info.get("default_samplerate", self.RATE))
+                    
+                    # Вариант 2: Если sd_index нет или не работает, ищем по имени
+                    if "device" not in device_params:
+                        for i, device in enumerate(sd.query_devices()):
+                            if device['max_input_channels'] > 0 and (
+                                "USB" in device['name'] or 
+                                (self.audio_device.get('name') and self.audio_device['name'] in device['name'])
+                            ):
+                                device_params["device"] = i
+                                sample_rate = int(device.get("default_samplerate", self.RATE))
+                                break
+                    
+                    # Вариант 3: Если предыдущие не сработали, используем ALSA hw путь
+                    if "device" not in device_params:
+                        try:
+                            card_num = self.audio_device['card']
+                            device_num = self.audio_device['device']
+                            device_id = f"hw:{card_num},{device_num}"
+                            device_params["device"] = device_id
+                        except Exception:
+                            pass
+                            
+                except Exception:
+                    # Если все попытки не удались, используем ALSA hw путь
+                    try:
+                        card_num = self.audio_device['card']
+                        device_num = self.audio_device['device']
+                        device_id = f"hw:{card_num},{device_num}"
+                        device_params["device"] = device_id
+                    except Exception:
+                        pass
+            # Для встроенного микрофона
+            elif self.audio_device:
+                try:
+                    device_id = f"hw:{self.audio_device['card']},{self.audio_device['device']}"
+                    device_params["device"] = device_id
+                except Exception:
+                    pass
+            
             # Запускаем поток записи
-            with sd.InputStream(samplerate=self.RATE, channels=self.CHANNELS, callback=callback):
+            with sd.InputStream(samplerate=sample_rate, channels=self.CHANNELS, callback=callback, **device_params):
+                # Продолжаем запись пока флаг is_recording установлен
                 while self.is_recording:
                     time.sleep(0.1)
             
-            if self.debug:
-                print("Поток записи завершен нормально")
-                
+            # Сохраняем запись при необходимости
+            if self.save_and_stop:
+                try:
+                    if self.audio_data and len(self.audio_data) > 0:
+                        audio_data_concat = np.concatenate(self.audio_data)
+                        sf.write(self.output_file, audio_data_concat, sample_rate)
+                        
+                        # Проверяем, что файл создан
+                        if os.path.exists(self.output_file):
+                            return self.output_file
+                        else:
+                            return None
+                    else:
+                        return None
+                except Exception as e:
+                    sentry_sdk.capture_exception(e)
+                    return None
+            return None
         except Exception as e:
-            error_msg = f"Ошибка в потоке записи: {e}"
-            print(error_msg)
             sentry_sdk.capture_exception(e)
-            self.is_recording = False
+            return None
     
     def pause_recording(self):
         """
@@ -245,13 +348,8 @@ class AudioRecorder:
                 self.is_paused = True
                 self.pause_start_time = time.time()
                 
-                if self.debug:
-                    print(f"Запись приостановлена. Время записи: {self.get_elapsed_time():.1f} сек")
-                    
                 return True
             except Exception as e:
-                error_msg = f"Ошибка при приостановке записи: {e}"
-                print(error_msg)
                 sentry_sdk.capture_exception(e)
                 return False
     
@@ -267,20 +365,16 @@ class AudioRecorder:
                 return False
                 
             try:
-                # Обновляем общее время на паузе
-                pause_duration = time.time() - self.pause_start_time
-                self.total_pause_time += pause_duration
+                # Обновляем общее время паузы
+                if self.pause_start_time:
+                    self.total_pause_time += time.time() - self.pause_start_time
+                    self.pause_start_time = None
                 
-                # Сбрасываем флаг паузы
+                # Снимаем флаг паузы
                 self.is_paused = False
                 
-                if self.debug:
-                    print(f"Запись возобновлена. Пауза длилась {pause_duration:.1f} сек")
-                    
                 return True
             except Exception as e:
-                error_msg = f"Ошибка при возобновлении записи: {e}"
-                print(error_msg)
                 sentry_sdk.capture_exception(e)
                 return False
     
@@ -293,202 +387,143 @@ class AudioRecorder:
         """
         with self.lock:
             if not self.is_recording:
-                if self.debug:
-                    print("Невозможно остановить запись: запись не активна")
                 return None
-                
+            
             try:
-                if self.debug:
-                    print("Останавливаем запись...")
+                # Устанавливаем флаг для сохранения перед остановкой
+                self.save_and_stop = True
                 
                 # Останавливаем запись
                 self.is_recording = False
-                
-                # Ждем завершения потока записи
-                if self.recording_thread and self.recording_thread.is_alive():
-                    self.recording_thread.join(timeout=2)
-                
-                # Останавливаем таймер
+                self.is_paused = False
                 self.stop_timer = True
-                if self.timer_thread and self.timer_thread.is_alive():
-                    self.timer_thread.join(timeout=1)
                 
-                # Если нет данных для сохранения
-                if not self.audio_data:
-                    warning_msg = "Нет данных для сохранения"
-                    print(warning_msg)
-                    
-                    return None
+                # Ждем завершения потока записи и сохранения файла
+                if self.recording_thread and self.recording_thread.is_alive():
+                    self.recording_thread.join(10.0)  # Ждем не более 10 секунд
                 
-                try:
-                    # Создаем директорию для сохранения, если она не существует
-                    os.makedirs(os.path.dirname(self.output_file), exist_ok=True)
-                    
-                    # Объединяем все части записи
-                    if self.debug:
-                        print(f"Сохраняем запись в файл: {self.output_file}")
-                        print(f"Количество блоков данных: {len(self.audio_data)}")
-                    
-                    data = np.concatenate(self.audio_data, axis=0)
-                    
-                    # Проверяем свободное место перед сохранением
-                    required_space = data.nbytes + 1024*1024  # Размер данных + 1MB запаса
-                    has_space, free_space = self.check_disk_space()
-                    
-                    if free_space and free_space < required_space:
-                        warning_msg = f"Критически мало места на диске: {free_space / (1024*1024*1024):.2f} GB. Требуется {required_space / (1024*1024*1024):.2f} GB"
-                        print(warning_msg)
-                        sentry_sdk.capture_message(warning_msg, level="warning")
-                    
-                    # Записываем файл
-                    sf.write(self.output_file, data, self.RATE)
-                    
-                    if self.debug:
-                        print(f"Запись успешно сохранена в файл: {self.output_file}")
-                    
-                    # Возвращаем путь к сохраненному файлу
-                    saved_file = self.output_file
-                    
-                    # Очищаем ресурсы
-                    self._clean_up()
-                    
-                    return saved_file
-                    
-                except OSError as e:
-                    error_msg = f"Ошибка ввода-вывода при сохранении файла: {e}"
-                    print(error_msg)
-                    sentry_sdk.capture_exception(e)
-                    self._clean_up()
+                # Проверяем, был ли файл создан
+                if os.path.exists(self.output_file):
+                    return self.output_file
+                else:
                     return None
-                    
             except Exception as e:
-                error_msg = f"Ошибка при остановке и сохранении записи: {e}"
-                print(error_msg)
                 sentry_sdk.capture_exception(e)
-                self._clean_up()
                 return None
+            finally:
+                self.save_and_stop = False  # Сбрасываем флаг
+                self._clean_up()
     
     def cancel_recording(self):
         """
         Отменяет запись без сохранения
         
         Returns:
-            bool: True, если запись успешно отменена
+            bool: True, если запись успешно отменена, иначе False
         """
         with self.lock:
             if not self.is_recording:
                 return False
                 
             try:
-                if self.debug:
-                    print("Отменяем запись без сохранения")
-                
                 # Останавливаем запись
                 self.is_recording = False
-                
-                # Ждем завершения потока записи
-                if self.recording_thread and self.recording_thread.is_alive():
-                    self.recording_thread.join(timeout=2)
-                
-                # Останавливаем таймер
                 self.stop_timer = True
-                if self.timer_thread and self.timer_thread.is_alive():
-                    self.timer_thread.join(timeout=1)
                 
                 # Очищаем ресурсы
                 self._clean_up()
                 
                 return True
             except Exception as e:
-                error_msg = f"Ошибка при отмене записи: {e}"
-                print(error_msg)
                 sentry_sdk.capture_exception(e)
-                self._clean_up()
                 return False
     
     def get_elapsed_time(self):
         """
-        Возвращает прошедшее время записи с учетом пауз
+        Возвращает время записи в секундах (без учета пауз)
         
         Returns:
             float: Время записи в секундах
         """
-        if not self.is_recording:
+        try:
+            if not self.start_time:
+                return 0
+                
+            elapsed = time.time() - self.start_time
+            
+            # Вычитаем общее время паузы
+            elapsed -= self.total_pause_time
+            
+            # Если запись на паузе, вычитаем текущее время паузы
+            if self.is_paused and self.pause_start_time:
+                elapsed -= (time.time() - self.pause_start_time)
+                
+            return max(0, elapsed)
+        except Exception as e:
+            sentry_sdk.capture_exception(e)
             return 0
-            
-        current_time = time.time()
-        
-        if self.is_paused:
-            # Если на паузе, считаем время до начала паузы
-            elapsed = self.pause_start_time - self.start_time - self.total_pause_time
-        else:
-            # Иначе считаем текущее время
-            elapsed = current_time - self.start_time - self.total_pause_time
-            
-        return max(0, elapsed)
     
     def set_timer_callback(self, callback):
         """
-        Устанавливает функцию обратного вызова для обновления времени
+        Устанавливает функцию обратного вызова для обновления таймера
         
         Args:
-            callback (callable): Функция, принимающая один аргумент (время в секундах)
+            callback (callable): Функция, которая будет вызываться с текущим временем записи
         """
         self.timer_callback = callback
     
     def _update_timer(self):
-        """Обновляет таймер и вызывает callback"""
-        last_time = 0
-        
-        while self.is_recording and not self.stop_timer:
-            current_time = self.get_elapsed_time()
-            
-            # Вызываем callback только если время изменилось
-            if int(current_time) != int(last_time) and self.timer_callback:
-                self.timer_callback(current_time)
-                last_time = current_time
+        """Обновляет таймер записи в отдельном потоке"""
+        try:
+            while not self.stop_timer and self.is_recording:
+                if self.timer_callback:
+                    elapsed_time = self.get_elapsed_time()
+                    self.timer_callback(elapsed_time)
                 
-            time.sleep(0.1)
+                time.sleep(0.1)
+        except Exception as e:
+            sentry_sdk.capture_exception(e)
     
     def _generate_filename(self):
         """
         Генерирует имя файла для записи на основе текущей даты и времени
         
         Returns:
-            str: Имя файла
+            str: Имя файла в формате 'YYYY-MM-DD_HH-MM-SS.wav'
         """
         now = datetime.datetime.now()
-        return f"record_{now.strftime('%Y-%m-%d_%H-%M-%S')}.wav"
+        return now.strftime("%Y-%m-%d_%H-%M-%S.wav")
     
     def _clean_up(self):
-        """Освобождает ресурсы"""
+        """Очищает ресурсы после записи"""
+        self.audio_data = []
         self.is_recording = False
         self.is_paused = False
-        self.audio_data = []
-        self.output_file = None
-        self.current_folder = None
+        self.start_time = None
+        self.pause_start_time = None
+        self.total_pause_time = 0
     
     def is_active(self):
         """
         Проверяет, активна ли запись
         
         Returns:
-            bool: True, если запись активна
+            bool: True, если запись активна, иначе False
         """
         return self.is_recording
     
     def is_on_pause(self):
         """
-        Проверяет, находится ли запись на паузе
+        Проверяет, приостановлена ли запись
         
         Returns:
-            bool: True, если запись на паузе
+            bool: True, если запись приостановлена, иначе False
         """
-        return self.is_recording and self.is_paused
+        return self.is_paused
     
     def get_current_folder(self):
         """
-        Возвращает текущую папку записи
+        Возвращает текущую папку для записи
         
         Returns:
             str: Имя папки или None, если запись не активна
