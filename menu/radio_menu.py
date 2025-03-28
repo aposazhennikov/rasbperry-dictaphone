@@ -196,6 +196,28 @@ class StationSubMenu(SubMenu):
             sentry_sdk.capture_exception(e)
             return []
             
+    def _format_file_name_for_speech(self, file_path):
+        """
+        Форматирует имя файла для озвучки
+        
+        Args:
+            file_path (str): Путь к файлу
+            
+        Returns:
+            str: Отформатированное имя для озвучивания
+        """
+        try:
+            # Получаем только имя файла без пути и расширения
+            file_name = os.path.basename(file_path)
+            name_without_ext = os.path.splitext(file_name)[0]
+            
+            # Возвращаем очищенное имя для озвучки
+            return f"Композиция {name_without_ext}"
+        except Exception as e:
+            logger.error(f"Ошибка при форматировании имени файла для озвучки: {e}")
+            sentry_sdk.capture_exception(e)
+            return "Неизвестная композиция"
+    
     def _play_audio_file(self, file_path):
         """
         Воспроизводит выбранный аудиофайл через аудиоплеер MenuManager
@@ -261,6 +283,23 @@ class StationSubMenu(SubMenu):
             # Запоминаем меню для возврата - это позволит вернуться в меню станции
             playback_manager.return_to_menu = self
             
+            # Сохраняем оригинальные методы PlaybackManager
+            if not hasattr(self, 'original_get_file_description'):
+                # Сохраняем оригинальный метод получения описания файла
+                if hasattr(playback_manager, 'get_human_readable_filename'):
+                    self.original_get_file_description = playback_manager.get_human_readable_filename
+                    
+                    # Переопределяем метод для правильного озвучивания имени файла
+                    def custom_get_description(file_path):
+                        # Для файлов из папки станции используем специальное форматирование
+                        if self.directory in file_path:
+                            return self._format_file_name_for_speech(file_path)
+                        # Для других файлов используем оригинальный метод
+                        return self.original_get_file_description(file_path)
+                    
+                    # Заменяем метод в playback_manager
+                    playback_manager.get_human_readable_filename = custom_get_description
+            
             # Устанавливаем обработчик завершения
             def completion_callback(success, message):
                 try:
@@ -271,6 +310,10 @@ class StationSubMenu(SubMenu):
                         # Возвращаемся в текущее меню
                         self.menu_manager.current_menu = self
                         self.menu_manager.display_current_menu()
+                        
+                        # Восстанавливаем оригинальные методы
+                        if hasattr(self, 'original_get_file_description'):
+                            playback_manager.get_human_readable_filename = self.original_get_file_description
                 except Exception as e:
                     logger.error(f"Ошибка в обработчике завершения воспроизведения: {e}")
                     sentry_sdk.capture_exception(e)
@@ -300,6 +343,11 @@ class StationSubMenu(SubMenu):
                 logger.error("Не удалось воспроизвести файл")
                 # Деактивируем режим аудиоплеера в случае ошибки
                 self.menu_manager.player_mode_active = False
+                
+                # Восстанавливаем оригинальные методы в случае ошибки
+                if hasattr(self, 'original_get_file_description'):
+                    playback_manager.get_human_readable_filename = self.original_get_file_description
+                    
                 return False
             
             logger.info(f"Воспроизведение файла начато: {file_path}")
@@ -311,4 +359,9 @@ class StationSubMenu(SubMenu):
             # Деактивируем режим аудиоплеера в случае исключения
             if hasattr(self, 'menu_manager') and self.menu_manager:
                 self.menu_manager.player_mode_active = False
+                
+                # Восстанавливаем оригинальные методы в случае исключения
+                if hasattr(self, 'original_get_file_description'):
+                    playback_manager.get_human_readable_filename = self.original_get_file_description
+                    
             return False
