@@ -16,6 +16,7 @@ from .menu_item import MenuItem, SubMenu, Menu
 from .external_storage_menu import ExternalStorageMenu
 from .base_menu import BaseMenu
 from .bulk_delete_manager import BulkDeleteManager
+from .radio_menu import RadioMenu
 
 # Настройка логирования
 logger = logging.getLogger("menu_manager")
@@ -87,7 +88,7 @@ class MenuManager:
             "paused": False,
             "folder": None,
             "elapsed_time": 0,
-            "formatted_time": "00:00",
+            "formatted_time": "00:00:00",
             "max_duration_handled": False
         }
         
@@ -97,8 +98,8 @@ class MenuManager:
             "paused": False,
             "folder": None,
             "current_file": None,
-            "position": "00:00",
-            "duration": "00:00",
+            "position": "00:00:00",
+            "duration": "00:00:00",
             "progress": 0
         }
         
@@ -834,19 +835,8 @@ class MenuManager:
         recent_menu.add_item(MenuItem("NAME", lambda: "Звонок NAME (последний)"))
         
         # Добавляем подменю для режима радио
-        radio_menu = SubMenu("Режим управления радио", parent=main_menu)
-        main_menu.add_item(MenuItem("Режим управления радио", lambda: radio_menu))
-        
-        # Добавляем радиостанции
-        for station in ["Юмор", "Наука", "Политика", "Трошин", "Шаов", "Природа"]:
-            station_menu = SubMenu(f"Радиостанция {station}", parent=radio_menu)
-            radio_menu.add_item(station_menu)
-            
-            # Добавляем пункты управления для каждой радиостанции
-            station_menu.add_item(MenuItem("Что сейчас звучит?", lambda s=station: f"Сейчас на {s} звучит: ..."))
-            station_menu.add_item(MenuItem("Начать текущую композицию с начала", lambda s=station: f"Перезапуск композиции на {s}"))
-            station_menu.add_item(MenuItem("Переключить на предыдущую композицию", lambda s=station: f"Предыдущая композиция на {s}"))
-            station_menu.add_item(MenuItem("Переключить на следующую композицию", lambda s=station: f"Следующая композиция на {s}"))
+        radio_menu = RadioMenu(parent=main_menu)
+        main_menu.add_item(MenuItem("Радио", lambda: radio_menu))
         
         # Добавляем подменю для внешних носителей
         external_storage = ExternalStorageMenu(
@@ -1033,7 +1023,7 @@ class MenuManager:
                 "paused": False,
                 "folder": folder,
                 "elapsed_time": 0,
-                "formatted_time": "00:00",
+                "formatted_time": "00:00:00",
                 "max_duration_handled": False
             }
             
@@ -1044,7 +1034,7 @@ class MenuManager:
                 # Отображаем экран записи
                 self.display_manager.display_recording_screen(
                     status="Recording",
-                    time="00:00",
+                    time="00:00:00",
                     folder=folder
                 )
                 

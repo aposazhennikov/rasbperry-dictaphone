@@ -608,15 +608,16 @@ class RecorderManager:
     
     def get_formatted_time(self):
         """
-        Возвращает отформатированное время записи в формате MM:SS
+        Возвращает отформатированное время записи в формате HH:MM:SS
         
         Returns:
-            str: Время в формате MM:SS
+            str: Время в формате HH:MM:SS
         """
         seconds = int(self.current_time)
-        minutes = seconds // 60
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
         seconds %= 60
-        return f"{minutes:02d}:{seconds:02d}"
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
     
     def get_status(self):
         """

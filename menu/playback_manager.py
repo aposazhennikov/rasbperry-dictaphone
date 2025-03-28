@@ -244,9 +244,10 @@ class PlaybackManager:
         time_str = file_created.strftime("%H:%M:%S")
         
         # Форматируем длительность
-        minutes = int(duration) // 60
+        hours = int(duration) // 3600
+        minutes = (int(duration) % 3600) // 60
         seconds = int(duration) % 60
-        duration_str = f"{minutes:02d}:{seconds:02d}"
+        duration_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
         
         # Формируем человекоразумное описание через метод get_human_readable_filename
         # который уже содержит логику для разных типов файлов

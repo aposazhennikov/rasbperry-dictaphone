@@ -759,35 +759,37 @@ class AudioPlayer:
     
     def get_formatted_position(self):
         """
-        Возвращает текущую позицию в формате MM:SS
+        Возвращает текущую позицию в формате HH:MM:SS
         
         Returns:
-            str: Строка в формате MM:SS
+            str: Строка в формате HH:MM:SS
         """
         try:
-            minutes = int(self.position) // 60
+            hours = int(self.position) // 3600
+            minutes = (int(self.position) % 3600) // 60
             seconds = int(self.position) % 60
-            return f"{minutes:02d}:{seconds:02d}"
+            return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
         except Exception as e:
             print(f"Ошибка при форматировании позиции: {e}")
             sentry_sdk.capture_exception(e)
-            return "00:00"
+            return "00:00:00"
     
     def get_formatted_duration(self):
         """
-        Возвращает длительность в формате MM:SS
+        Возвращает длительность в формате HH:MM:SS
         
         Returns:
-            str: Строка в формате MM:SS
+            str: Строка в формате HH:MM:SS
         """
         try:
-            minutes = int(self.duration) // 60
+            hours = int(self.duration) // 3600
+            minutes = (int(self.duration) % 3600) // 60
             seconds = int(self.duration) % 60
-            return f"{minutes:02d}:{seconds:02d}"
+            return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
         except Exception as e:
             print(f"Ошибка при форматировании длительности: {e}")
             sentry_sdk.capture_exception(e)
-            return "00:00"
+            return "00:00:00"
     
     def get_progress(self):
         """
