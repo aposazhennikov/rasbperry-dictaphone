@@ -835,7 +835,7 @@ class MenuManager:
         recent_menu.add_item(MenuItem("NAME", lambda: "Звонок NAME (последний)"))
         
         # Добавляем подменю для режима радио
-        radio_menu = RadioMenu(parent=main_menu)
+        radio_menu = RadioMenu(parent=main_menu, menu_manager=self)
         main_menu.add_item(MenuItem("Радио", lambda: radio_menu))
         
         # Добавляем подменю для внешних носителей
