@@ -6,6 +6,7 @@ import os
 import glob
 import logging
 import sentry_sdk
+import time
 from .menu_item import MenuItem, SubMenu
 
 # Настройка логирования
@@ -197,7 +198,7 @@ class StationSubMenu(SubMenu):
             
     def _play_audio_file(self, file_path):
         """
-        Воспроизводит выбранный аудиофайл
+        Воспроизводит выбранный аудиофайл через аудиоплеер MenuManager
         
         Args:
             file_path: Путь к аудиофайлу
@@ -222,7 +223,7 @@ class StationSubMenu(SubMenu):
             playback_manager = self.menu_manager.playback_manager
             
             # Проверяем наличие необходимых методов
-            required_methods = ['set_current_file', 'play_current_file', 'set_completion_callback']
+            required_methods = ['set_current_file', 'play_current_file']
             for method in required_methods:
                 if not hasattr(playback_manager, method):
                     logger.error(f"Метод {method} не найден в playback_manager")
@@ -236,15 +237,28 @@ class StationSubMenu(SubMenu):
             
             # Находим индекс текущего файла
             try:
-                file_index = audio_files.index(file_path)
+                current_index = audio_files.index(file_path)
             except ValueError:
                 logger.warning(f"Файл {file_path} не найден в списке, используем первый файл")
-                file_index = 0
+                if audio_files:
+                    # Если файл не найден в списке, но список не пуст, используем первый файл
+                    file_path = audio_files[0]
+                    current_index = 0
+                else:
+                    return False
+            
+            # Дополнительное логирование для отладки
+            logger.info(f"Текущее меню перед воспроизведением: {self.menu_manager.current_menu.name if hasattr(self.menu_manager.current_menu, 'name') else 'Неизвестно'}")
+            
+            # Запоминаем текущее меню для возврата
+            self.menu_manager.source_menu = self.menu_manager.current_menu
+            logger.info(f"Установлено source_menu для возврата: {self.menu_manager.source_menu.name if hasattr(self.menu_manager.source_menu, 'name') else 'Неизвестно'}")
             
             # Устанавливаем текущий файл и список файлов в playback_manager
             playback_manager.files_list = audio_files
+            playback_manager.current_folder = self.directory
             
-            # Запоминаем меню для возврата
+            # Запоминаем меню для возврата - это позволит вернуться в меню станции
             playback_manager.return_to_menu = self
             
             # Устанавливаем обработчик завершения
@@ -261,21 +275,40 @@ class StationSubMenu(SubMenu):
                     logger.error(f"Ошибка в обработчике завершения воспроизведения: {e}")
                     sentry_sdk.capture_exception(e)
             
-            playback_manager.set_completion_callback(completion_callback)
+            # Устанавливаем обработчик завершения, если доступен
+            if hasattr(playback_manager, 'set_completion_callback'):
+                playback_manager.set_completion_callback(completion_callback)
             
-            # Активируем режим проигрывателя
+            # Устанавливаем текущий файл
+            set_file_result = playback_manager.set_current_file(current_index)
+            if not set_file_result:
+                logger.error(f"Не удалось установить текущий файл с индексом {current_index}")
+                return False
+            
+            # Активируем режим аудиоплеера
             self.menu_manager.player_mode_active = True
+            logger.info("Активирован режим аудиоплеера")
+            
+            # Добавляем задержку, чтобы дать возможность завершиться озвучиванию имени файла
+            # прежде чем начать воспроизведение самого файла
+            time.sleep(1.5)
             
             # Запускаем воспроизведение
-            logger.info(f"Воспроизведение файла: {file_path}")
-            result = playback_manager.set_current_file(file_index)
-            if result:
-                return playback_manager.play_current_file()
-            else:
-                logger.error("Не удалось установить текущий файл")
+            result = playback_manager.play_current_file()
             
-            return False
+            if not result:
+                logger.error("Не удалось воспроизвести файл")
+                # Деактивируем режим аудиоплеера в случае ошибки
+                self.menu_manager.player_mode_active = False
+                return False
+            
+            logger.info(f"Воспроизведение файла начато: {file_path}")
+            return True
+            
         except Exception as e:
             logger.error(f"Ошибка при воспроизведении файла {file_path}: {e}")
             sentry_sdk.capture_exception(e)
+            # Деактивируем режим аудиоплеера в случае исключения
+            if hasattr(self, 'menu_manager') and self.menu_manager:
+                self.menu_manager.player_mode_active = False
             return False
