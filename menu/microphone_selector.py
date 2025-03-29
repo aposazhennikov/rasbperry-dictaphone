@@ -4,6 +4,7 @@ import subprocess
 import threading
 import time
 from .menu_item import MenuItem, SubMenu
+from .event_bus import EventBus, EVENT_USB_MIC_DISCONNECTED, EVENT_RECORDING_SAVED
 
 class MicrophoneSelector:
     """Класс для выбора микрофона в настройках"""
@@ -73,6 +74,17 @@ class MicrophoneSelector:
         try:
             last_usb_state = self.is_usb_microphone_connected()
             
+            # Получаем экземпляр EventBus
+            event_bus = EventBus.get_instance()
+            if self.debug:
+                event_bus.set_debug(self.debug)
+            
+            # Подписываемся на события завершения записи
+            event_bus.subscribe(EVENT_RECORDING_SAVED, self._handle_recording_saved)
+            
+            # Флаг для отслеживания, что мы ожидаем сохранения записи
+            self.waiting_for_recording_save = False
+            
             while not self.stop_monitoring_flag:
                 # Проверяем текущее состояние USB микрофона
                 current_usb_state = self.is_usb_microphone_connected()
@@ -85,10 +97,24 @@ class MicrophoneSelector:
                     # Если USB микрофон был отключен, и он был выбран
                     if not current_usb_state and self.get_microphone() == "usb":
                         if self.debug:
-                            print("USB микрофон был отключен, переключаемся на встроенный")
+                            print("USB микрофон был отключен, и он был выбран")
                         
-                        # Принудительно переключаемся на встроенный микрофон
-                        self.change_microphone("built_in", force=True)
+                        # Публикуем событие отключения USB микрофона
+                        # Другие компоненты (RecorderManager) могут подписаться на это событие
+                        event_bus.publish(
+                            EVENT_USB_MIC_DISCONNECTED,
+                            microphone_selector=self
+                        )
+                        
+                        # Устанавливаем флаг ожидания сохранения записи
+                        # Теперь мы не будем сразу переключать микрофон и возвращаться в главное меню
+                        # Это произойдет только после получения события о сохранении записи
+                        self.waiting_for_recording_save = True
+                        
+                        # Если запись не активна, сразу переключаемся на встроенный микрофон
+                        # RecorderManager должен сам определить, была ли активна запись
+                        if not self.waiting_for_recording_save:
+                            self._switch_to_built_in_microphone()
                     
                     # Обновляем отображение меню
                     self._setup_menu_items()
@@ -98,8 +124,50 @@ class MicrophoneSelector:
                 
                 # Пауза перед следующей проверкой
                 time.sleep(1.0)
+                
+            # Отписываемся от событий при завершении цикла
+            event_bus.unsubscribe(EVENT_RECORDING_SAVED, self._handle_recording_saved)
+                
         except Exception as e:
             error_msg = f"Ошибка в цикле мониторинга микрофонов: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+    
+    def _handle_recording_saved(self, **kwargs):
+        """
+        Обработчик события сохранения записи
+        
+        Args:
+            **kwargs: Параметры события
+        """
+        try:
+            if self.debug:
+                print("MicrophoneSelector: Получено событие о завершении записи")
+            
+            # Сбрасываем флаг ожидания сохранения
+            self.waiting_for_recording_save = False
+            
+            # Переключаемся на встроенный микрофон и возвращаемся в главное меню
+            self._switch_to_built_in_microphone()
+            
+        except Exception as e:
+            error_msg = f"Ошибка при обработке события сохранения записи: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+    
+    def _switch_to_built_in_microphone(self):
+        """
+        Переключение на встроенный микрофон и возврат в главное меню
+        """
+        try:
+            if self.debug:
+                print("Переключение на встроенный микрофон после отключения USB микрофона")
+            
+            # Принудительно переключаемся на встроенный микрофон
+            self.change_microphone("built_in", force=True)
+            
+        except Exception as e:
+            error_msg = f"Ошибка при переключении на встроенный микрофон: {e}"
             print(error_msg)
             sentry_sdk.capture_exception(e)
     

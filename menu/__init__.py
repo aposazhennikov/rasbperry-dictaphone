@@ -13,6 +13,7 @@ from .recorder_manager import RecorderManager
 from .playback_manager import PlaybackManager
 from .radio_menu import RadioMenu
 from .microphone_selector import MicrophoneSelector
+from .event_bus import EventBus, EVENT_USB_MIC_DISCONNECTED, EVENT_RECORDING_SAVED, EVENT_RECORDING_FAILED
 
 """
 Пакет menu содержит классы для работы с иерархическим меню.

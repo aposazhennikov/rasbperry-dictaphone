@@ -5,6 +5,7 @@ import threading
 from .audio_recorder import AudioRecorder
 import subprocess
 import sentry_sdk
+from .event_bus import EventBus, EVENT_USB_MIC_DISCONNECTED, EVENT_RECORDING_SAVED, EVENT_RECORDING_FAILED
 
 class RecorderManager:
     """Класс для управления записью аудио и взаимодействия с пользовательским интерфейсом"""
@@ -47,6 +48,23 @@ class RecorderManager:
             
         # Регистрируем обработчик для системных сообщений
         self.recorder.set_timer_callback(self._timer_callback)
+        
+        # Подписываемся на событие отключения USB микрофона
+        self.event_bus = EventBus.get_instance()
+        if self.debug:
+            self.event_bus.set_debug(debug)
+        self.event_bus.subscribe(EVENT_USB_MIC_DISCONNECTED, self._handle_usb_microphone_disconnected)
+    
+    def __del__(self):
+        """Деструктор класса"""
+        try:
+            # Отписываемся от событий при удалении объекта
+            if hasattr(self, 'event_bus'):
+                self.event_bus.unsubscribe(EVENT_USB_MIC_DISCONNECTED, self._handle_usb_microphone_disconnected)
+        except Exception as e:
+            error_msg = f"Ошибка при деструкторе RecorderManager: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
     
     def _create_directories(self):
         """Создает директории для записей"""
@@ -730,5 +748,121 @@ class RecorderManager:
                 time.sleep(1)  # Имитация паузы для воспроизведения
         except Exception as e:
             error_msg = f"Ошибка при блокирующем воспроизведении уведомления: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+    
+    def _handle_usb_microphone_disconnected(self, **kwargs):
+        """
+        Обработчик события отключения USB микрофона
+        
+        Args:
+            **kwargs: Параметры события
+        """
+        try:
+            if self.debug:
+                print("RecorderManager: Получено событие отключения USB микрофона")
+            
+            # Проверяем, идет ли запись
+            if self.is_recording():
+                if self.debug:
+                    print("RecorderManager: Запись активна, останавливаем и сохраняем")
+                
+                # Воспроизводим сообщение
+                self._play_notification_message("USB микрофон отключен. Останавливаем запись...")
+                
+                # Останавливаем запись с сохранением файла
+                saved_file = self.stop_recording_with_notification(
+                    "Запись сохранена после отключения USB микрофона", 
+                    publish_event=True
+                )
+                
+                if self.debug:
+                    print(f"RecorderManager: Запись сохранена в файл {saved_file}")
+            else:
+                if self.debug:
+                    print("RecorderManager: Запись не активна, событие игнорируется")
+                
+                # Публикуем событие о завершенной записи, чтобы MicrophoneSelector мог продолжить
+                self.event_bus.publish(EVENT_RECORDING_SAVED)
+            
+        except Exception as e:
+            error_msg = f"Ошибка при обработке отключения USB микрофона: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            
+            # Публикуем событие об ошибке
+            self.event_bus.publish(EVENT_RECORDING_FAILED, error=str(e))
+    
+    def stop_recording_with_notification(self, message="Запись сохранена", publish_event=False):
+        """
+        Останавливает запись, воспроизводит сообщение и публикует событие.
+        
+        Args:
+            message (str): Сообщение для воспроизведения
+            publish_event (bool): Публиковать ли событие о сохранении записи
+            
+        Returns:
+            str: Путь к сохраненному файлу или None в случае ошибки
+        """
+        try:
+            # Останавливаем запись
+            saved_file = self.stop_recording()
+            
+            if saved_file:
+                # Воспроизводим сообщение
+                self._play_notification_message(message)
+                
+                # Публикуем событие о сохранении записи, если нужно
+                if publish_event:
+                    self.event_bus.publish(
+                        EVENT_RECORDING_SAVED,
+                        saved_file=saved_file
+                    )
+                
+                return saved_file
+            else:
+                # Если сохранение не удалось, воспроизводим сообщение об ошибке
+                self._play_notification_message("Ошибка при сохранении записи")
+                
+                # Публикуем событие об ошибке, если нужно
+                if publish_event:
+                    self.event_bus.publish(
+                        EVENT_RECORDING_FAILED,
+                        error="Не удалось сохранить запись"
+                    )
+                
+                return None
+                
+        except Exception as e:
+            error_msg = f"Ошибка при остановке записи с уведомлением: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            
+            # Публикуем событие об ошибке, если нужно
+            if publish_event:
+                self.event_bus.publish(
+                    EVENT_RECORDING_FAILED,
+                    error=str(e)
+                )
+                
+            return None
+    
+    def _play_notification_message(self, message):
+        """
+        Воспроизводит системное сообщение
+        
+        Args:
+            message (str): Текст сообщения
+        """
+        try:
+            if self.tts_manager:
+                voice_id = self.settings_manager.get_voice() if hasattr(self, 'settings_manager') else None
+                self.tts_manager.play_speech(message, voice_id=voice_id)
+                
+                # Пауза, чтобы сообщение было полностью воспроизведено
+                time.sleep(len(message) * 0.08)  # Примерно 80 мс на символ
+                
+        except Exception as e:
+            error_msg = f"Ошибка при воспроизведении системного сообщения: {e}"
             print(error_msg)
             sentry_sdk.capture_exception(e)
