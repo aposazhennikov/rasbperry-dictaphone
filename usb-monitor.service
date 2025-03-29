@@ -1,0 +1,17 @@
+[Unit]
+Description=USB Device Monitor Service
+After=network.target
+
+[Service]
+User=aleks
+Group=aleks
+WorkingDirectory=/home/aleks/main-scripts
+ExecStart=/home/aleks/main-scripts/venv/bin/python3 /home/aleks/main-scripts/usb_monitor_service.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=usb-monitor
+
+[Install]
+WantedBy=multi-user.target 
