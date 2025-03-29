@@ -17,6 +17,7 @@ from .external_storage_menu import ExternalStorageMenu
 from .base_menu import BaseMenu
 from .bulk_delete_manager import BulkDeleteManager
 from .radio_menu import RadioMenu
+from .microphone_selector import MicrophoneSelector
 
 # Настройка логирования
 logger = logging.getLogger("menu_manager")
@@ -872,6 +873,27 @@ class MenuManager:
                 create_voice_action()
             ))
 
+        # - Подменю выбора микрофона
+        try:
+            # Создаем селектор микрофона
+            microphone_selector = MicrophoneSelector(
+                menu_manager=self,
+                settings_manager=self.settings_manager,
+                debug=self.debug
+            )
+            
+            # Получаем подменю от селектора и добавляем его в настройки
+            microphone_menu = microphone_selector.get_menu()
+            microphone_menu.parent = settings_menu
+            settings_menu.add_item(microphone_menu)
+            
+            if self.debug:
+                print("Подменю выбора микрофона добавлено в настройки")
+        except Exception as e:
+            error_msg = f"Ошибка при добавлении меню выбора микрофона: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+                
         # - Подменю управления громкостью системных сообщений
         volume_menu = SubMenu("Громкость системных сообщений", parent=settings_menu)
         # Добавляем обработчик входа в меню для озвучивания текущей громкости

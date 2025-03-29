@@ -12,6 +12,7 @@ from .audio_recorder import AudioRecorder
 from .recorder_manager import RecorderManager
 from .playback_manager import PlaybackManager
 from .radio_menu import RadioMenu
+from .microphone_selector import MicrophoneSelector
 
 """
 Пакет menu содержит классы для работы с иерархическим меню.

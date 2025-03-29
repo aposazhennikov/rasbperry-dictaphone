@@ -23,7 +23,8 @@ class SettingsManager:
                 "voice": "ru-RU-Standard-A",
                 "tts_engine": "gtts",
                 "google_cloud_credentials": None,
-                "system_volume": 100  # Добавляем настройку громкости по умолчанию
+                "system_volume": 100,  # Добавляем настройку громкости по умолчанию
+                "microphone": "built_in"  # Добавляем настройку микрофона по умолчанию
             }
             
             # Создаем директорию для файла настроек, если её нет
@@ -335,6 +336,90 @@ class SettingsManager:
             
         except Exception as e:
             error_msg = f"Критическая ошибка при установке громкости в настройках: {e}"
+            print(f"[SETTINGS CRITICAL ERROR] {error_msg}")
+            sentry_sdk.capture_exception(e)
+            return False
+            
+    def get_microphone(self):
+        """
+        Возвращает текущий выбранный микрофон
+        
+        Returns:
+            str: Идентификатор микрофона ("built_in" или "usb")
+        """
+        try:
+            return self.settings.get("microphone", "built_in")
+        except Exception as e:
+            error_msg = f"Ошибка при получении настройки микрофона: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return "built_in"  # По умолчанию используем встроенный микрофон
+            
+    def set_microphone(self, microphone_id):
+        """
+        Устанавливает текущий микрофон
+        
+        Args:
+            microphone_id (str): Идентификатор микрофона ("built_in" или "usb")
+            
+        Returns:
+            bool: True если успешно, иначе False
+        """
+        try:
+            # Логируем начало процесса
+            sentry_sdk.add_breadcrumb(
+                category="microphone",
+                message=f"Settings Manager: Начало установки микрофона {microphone_id}",
+                level="info"
+            )
+            print(f"[SETTINGS] Запрос на установку микрофона: {microphone_id}")
+            
+            # Проверяем корректность значения
+            if microphone_id not in ["built_in", "usb"]:
+                error_msg = f"Settings Manager: Некорректный идентификатор микрофона: {microphone_id}"
+                print(f"[SETTINGS ERROR] {error_msg}")
+                sentry_sdk.capture_message(error_msg, level="error")
+                return False
+            
+            # Сохраняем текущее значение для возможного восстановления
+            old_microphone = self.get_microphone()
+            
+            # Устанавливаем новое значение
+            self.settings["microphone"] = microphone_id
+            
+            # Сохраняем настройки в файл
+            try:
+                self.save_settings()
+                print(f"[SETTINGS] Настройки сохранены в файл")
+            except Exception as save_error:
+                error_msg = f"Ошибка при сохранении настроек: {save_error}"
+                print(f"[SETTINGS ERROR] {error_msg}")
+                sentry_sdk.capture_exception(save_error)
+                # Восстанавливаем старое значение
+                self.settings["microphone"] = old_microphone
+                return False
+            
+            # Проверяем, что микрофон действительно установлен
+            new_microphone = self.get_microphone()
+            if new_microphone != microphone_id:
+                error_msg = f"Settings Manager: Микрофон не был установлен: ожидался {microphone_id}, получен {new_microphone}"
+                print(f"[SETTINGS ERROR] {error_msg}")
+                sentry_sdk.capture_message(error_msg, level="error")
+                return False
+            
+            print(f"[SETTINGS] Микрофон успешно установлен: {microphone_id}")
+            
+            # Логируем успешную установку микрофона
+            sentry_sdk.add_breadcrumb(
+                category="microphone",
+                message=f"Settings Manager: Микрофон успешно изменен с {old_microphone} на {new_microphone}",
+                level="info"
+            )
+            
+            return True
+            
+        except Exception as e:
+            error_msg = f"Критическая ошибка при установке микрофона в настройках: {e}"
             print(f"[SETTINGS CRITICAL ERROR] {error_msg}")
             sentry_sdk.capture_exception(e)
             return False 
