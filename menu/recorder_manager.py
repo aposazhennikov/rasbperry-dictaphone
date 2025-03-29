@@ -9,7 +9,7 @@ import sentry_sdk
 class RecorderManager:
     """Класс для управления записью аудио и взаимодействия с пользовательским интерфейсом"""
     
-    def __init__(self, tts_manager, base_dir="/home/aleks/records", debug=False, beep_sound_path="/home/aleks/main-sounds/beep.wav"):
+    def __init__(self, tts_manager, base_dir="/home/aleks/records", debug=False, beep_sound_path="/home/aleks/main-sounds/beep.wav", settings_manager=None):
         """
         Инициализация менеджера записи
         
@@ -18,12 +18,16 @@ class RecorderManager:
             base_dir (str): Базовая директория для сохранения записей
             debug (bool): Режим отладки
             beep_sound_path (str): Путь к звуковому файлу для сигнала начала записи
+            settings_manager: Ссылка на менеджер настроек
         """
         self.tts_manager = tts_manager
         self.base_dir = base_dir
         self.debug = debug
         self.beep_sound_path = beep_sound_path
-        self.recorder = AudioRecorder(base_dir=base_dir, debug=debug)
+        self.settings_manager = settings_manager
+        
+        # Создаем экземпляр рекордера и передаем ему settings_manager
+        self.recorder = AudioRecorder(base_dir=base_dir, debug=debug, settings_manager=settings_manager)
         
         # Колбэк для обновления информации о записи
         self.update_callback = None
@@ -141,7 +145,7 @@ class RecorderManager:
             if not self.recorder:
                 if self.debug:
                     print(f"Создаем новый экземпляр AudioRecorder для {folder_path}")
-                self.recorder = AudioRecorder(folder_path, debug=self.debug)
+                self.recorder = AudioRecorder(folder_path, debug=self.debug, settings_manager=self.settings_manager)
                 
             # Озвучиваем начало записи
             voice_id = self.settings_manager.get_voice() if hasattr(self, 'settings_manager') else None

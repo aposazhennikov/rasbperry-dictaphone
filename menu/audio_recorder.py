@@ -13,6 +13,7 @@ import sentry_sdk
 class AudioRecorder:
     """Класс для записи аудио с микрофона, использующий sounddevice"""
     
+    # Удаляем статическую карту устройств микрофонов, теперь они будут определяться динамически
     # Константы для настроек записи
     RATE = 44100
     CHANNELS = 1
@@ -23,16 +24,22 @@ class AudioRecorder:
     # Минимальное требуемое свободное место в байтах (1 GB)
     MIN_FREE_SPACE = 1 * 1024 * 1024 * 1024
     
-    def __init__(self, base_dir="/home/aleks/records", debug=False):
+    # Маркеры для определения микрофонов
+    BUILT_IN_MIC_MARKER = "USB Composite Device"  # Маркер встроенного микрофона
+    USB_MIC_MARKER = "(LCS) USB Audio Device"     # Маркер USB микрофона
+    
+    def __init__(self, base_dir="/home/aleks/records", debug=False, settings_manager=None):
         """
         Инициализация рекордера
         
         Args:
             base_dir (str): Базовая директория для сохранения записей
             debug (bool): Режим отладки
+            settings_manager: Ссылка на менеджер настроек для получения настроек микрофона
         """
         self.base_dir = base_dir
         self.debug = debug
+        self.settings_manager = settings_manager
         self.audio_data = []
         self.is_recording = False
         self.is_paused = False
@@ -215,8 +222,20 @@ class AudioRecorder:
                         print(error_msg)
                         sentry_sdk.capture_exception(e)
             
-            # Запускаем поток записи
-            with sd.InputStream(samplerate=self.RATE, channels=self.CHANNELS, callback=callback):
+            # Получаем ID устройства микрофона из настроек
+            device_id = self._get_selected_microphone_device()
+            
+            # Определяем поддерживаемую частоту дискретизации для устройства
+            sample_rate = self._get_supported_sample_rate(device_id)
+            
+            # Определяем количество каналов для устройства
+            channels = self._get_supported_channels(device_id)
+            
+            if self.debug:
+                print(f"Запуск записи с микрофона device_id={device_id}, sample_rate={sample_rate}, channels={channels}")
+            
+            # Запускаем поток записи с выбранным микрофоном, частотой дискретизации и количеством каналов
+            with sd.InputStream(samplerate=sample_rate, channels=channels, callback=callback, device=device_id):
                 while self.is_recording:
                     time.sleep(0.1)
             
@@ -228,6 +247,110 @@ class AudioRecorder:
             print(error_msg)
             sentry_sdk.capture_exception(e)
             self.is_recording = False
+    
+    def _get_selected_microphone_device(self):
+        """
+        Определяет ID устройства микрофона на основе настроек.
+        Использует непосредственно идентификаторы sounddevice.
+        
+        Returns:
+            int or str: ID устройства для sounddevice
+        """
+        try:
+            # Получаем список устройств sounddevice
+            if self.debug:
+                print("Получение списка устройств ввода sounddevice:")
+                for i, device in enumerate(sd.query_devices()):
+                    print(f"Device {i}: {device['name']} - {device}")
+            
+            # Если нет менеджера настроек, используем встроенный микрофон по умолчанию
+            if not self.settings_manager:
+                if self.debug:
+                    print("Нет доступа к настройкам, используем встроенный микрофон по умолчанию")
+                return self._find_sounddevice_mic(self.BUILT_IN_MIC_MARKER)
+            
+            # Получаем настройку микрофона
+            microphone_setting = self.settings_manager.get_microphone()
+            
+            if self.debug:
+                print(f"Настройка микрофона из settings.json: {microphone_setting}")
+            
+            # Если выбран USB микрофон
+            if microphone_setting == "usb":
+                # Находим USB микрофон в списке устройств sounddevice
+                usb_mic_id = self._find_sounddevice_mic(self.USB_MIC_MARKER)
+                
+                # Если найден, используем его
+                if usb_mic_id is not None:
+                    if self.debug:
+                        print(f"Найден USB микрофон, используем device_id={usb_mic_id}")
+                    return usb_mic_id
+                
+                # Если USB микрофон не найден, используем встроенный
+                if self.debug:
+                    print("USB микрофон выбран в настройках, но не подключен. Используем встроенный микрофон.")
+                return self._find_sounddevice_mic(self.BUILT_IN_MIC_MARKER)
+            
+            # Если выбран встроенный микрофон
+            return self._find_sounddevice_mic(self.BUILT_IN_MIC_MARKER)
+            
+        except Exception as e:
+            error_msg = f"Ошибка при определении устройства микрофона: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            # По умолчанию используем устройство по умолчанию
+            return None  # None означает использовать устройство по умолчанию
+    
+    def _find_sounddevice_mic(self, marker):
+        """
+        Находит микрофон в списке устройств sounddevice по маркеру
+        
+        Args:
+            marker (str): Маркер для поиска в названии устройства
+            
+        Returns:
+            int or str: ID устройства для sounddevice или None, если не найдено
+        """
+        try:
+            # Получаем все устройства
+            devices = sd.query_devices()
+            
+            # Ищем входное устройство с совпадающим маркером
+            for i, device in enumerate(devices):
+                # Проверяем, что это входное устройство
+                if device.get('max_input_channels', 0) > 0:
+                    # Проверяем, содержит ли имя устройства маркер
+                    device_name = device.get('name', '')
+                    if marker in device_name:
+                        if self.debug:
+                            print(f"Найден микрофон с маркером '{marker}': device_id={i}, name={device_name}")
+                        return i  # Возвращаем индекс устройства
+            
+            # Если не нашли устройство с маркером, ищем любое входное устройство
+            for i, device in enumerate(devices):
+                if device.get('max_input_channels', 0) > 0:
+                    if self.debug:
+                        print(f"Используем первое доступное входное устройство: device_id={i}, name={device.get('name', '')}")
+                    return i
+            
+            # Если не нашли ни одного входного устройства, возвращаем устройство по умолчанию
+            if self.debug:
+                print(f"Не найдено входных устройств, используем устройство по умолчанию")
+            return None  # None означает использовать устройство по умолчанию
+        except Exception as e:
+            error_msg = f"Ошибка при поиске микрофона: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return None
+    
+    def _check_usb_microphone_connected(self):
+        """
+        Проверяет, подключен ли USB микрофон
+        
+        Returns:
+            bool: True если USB микрофон подключен, иначе False
+        """
+        return self._find_sounddevice_mic(self.USB_MIC_MARKER) is not None
     
     def pause_recording(self):
         """
@@ -340,11 +463,22 @@ class AudioRecorder:
                         print(warning_msg)
                         sentry_sdk.capture_message(warning_msg, level="warning")
                     
-                    # Записываем файл
-                    sf.write(self.output_file, data, self.RATE)
+                    # Получаем фактическую частоту дискретизации и количество каналов из устройства
+                    device_id = self._get_selected_microphone_device()
+                    rate = self._get_supported_sample_rate(device_id)
+                    
+                    # Преобразуем многоканальные данные в моно для сохранения, если нужно
+                    if data.shape[1] > 1:
+                        if self.debug:
+                            print(f"Преобразуем {data.shape[1]} каналов в моно для сохранения")
+                        # Усредняем все каналы для получения моно
+                        data = np.mean(data, axis=1, keepdims=True)
+                    
+                    # Записываем файл с правильной частотой дискретизации
+                    sf.write(self.output_file, data, rate)
                     
                     if self.debug:
-                        print(f"Запись успешно сохранена в файл: {self.output_file}")
+                        print(f"Запись успешно сохранена в файл: {self.output_file} с частотой {rate} Гц")
                     
                     # Возвращаем путь к сохраненному файлу
                     saved_file = self.output_file
@@ -493,4 +627,107 @@ class AudioRecorder:
         Returns:
             str: Имя папки или None, если запись не активна
         """
-        return self.current_folder if self.is_recording else None 
+        return self.current_folder if self.is_recording else None
+    
+    def _get_supported_sample_rate(self, device_id):
+        """
+        Определяет поддерживаемую частоту дискретизации для устройства
+        
+        Args:
+            device_id (int): ID устройства
+            
+        Returns:
+            int: Поддерживаемая частота дискретизации
+        """
+        try:
+            # Стандартные частоты дискретизации для проверки
+            standard_rates = [48000, 44100, 32000, 22050, 16000, 8000]
+            
+            # Получаем информацию об устройстве
+            device_info = sd.query_devices(device_id, 'input')
+            
+            if self.debug:
+                print(f"Информация об устройстве {device_id}:")
+                print(device_info)
+            
+            # Если устройство имеет информацию о доступных частотах дискретизации
+            if 'default_samplerate' in device_info:
+                default_rate = device_info['default_samplerate']
+                if self.debug:
+                    print(f"Устройство {device_id} имеет частоту дискретизации по умолчанию: {default_rate}")
+                return int(default_rate)
+            
+            # Пробуем стандартные частоты дискретизации
+            for rate in standard_rates:
+                try:
+                    # Проверяем возможность открытия устройства с данной частотой
+                    sd.check_input_settings(device=device_id, samplerate=rate, channels=self.CHANNELS)
+                    if self.debug:
+                        print(f"Устройство {device_id} поддерживает частоту {rate} Гц")
+                    return rate
+                except Exception as check_error:
+                    if self.debug:
+                        print(f"Устройство {device_id} не поддерживает частоту {rate} Гц: {check_error}")
+                    continue
+            
+            # Если ни одна из стандартных частот не подходит, пробуем любую возможную
+            try:
+                test_stream = sd.InputStream(device=device_id, channels=self.CHANNELS)
+                rate = int(test_stream.samplerate)
+                test_stream.close()
+                if self.debug:
+                    print(f"Использую доступную частоту {rate} Гц для устройства {device_id}")
+                return rate
+            except Exception as stream_error:
+                if self.debug:
+                    print(f"Не удалось определить частоту для устройства {device_id}: {stream_error}")
+            
+            # Если все методы не сработали, возвращаем стандартную частоту и надеемся на лучшее
+            if self.debug:
+                print(f"Использую стандартную частоту 48000 Гц для устройства {device_id}")
+            return 48000
+            
+        except Exception as e:
+            error_msg = f"Ошибка при определении частоты дискретизации: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            # Возвращаем 48000 как наиболее безопасную частоту
+            return 48000
+    
+    def _get_supported_channels(self, device_id):
+        """
+        Определяет поддерживаемое количество каналов для устройства
+        
+        Args:
+            device_id (int): ID устройства
+            
+        Returns:
+            int: Поддерживаемое количество каналов
+        """
+        try:
+            # Получаем информацию об устройстве
+            device_info = sd.query_devices(device_id, 'input')
+            
+            if self.debug:
+                print(f"Получение информации о каналах для устройства {device_id}:")
+                print(f"Устройство: {device_info}")
+            
+            # Проверяем, имеет ли устройство информацию о каналах
+            if 'max_input_channels' in device_info:
+                channels = device_info['max_input_channels']
+                if self.debug:
+                    print(f"Устройство {device_id} поддерживает {channels} каналов")
+                # Убедимся, что количество каналов не менее 1
+                return max(1, int(channels))
+            
+            # Если не удалось определить количество каналов, используем значение по умолчанию
+            if self.debug:
+                print(f"Не удалось определить количество каналов для устройства {device_id}, используем CHANNELS={self.CHANNELS}")
+            return self.CHANNELS
+            
+        except Exception as e:
+            error_msg = f"Ошибка при определении количества каналов: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            # Возвращаем стандартное значение в случае ошибки
+            return self.CHANNELS 

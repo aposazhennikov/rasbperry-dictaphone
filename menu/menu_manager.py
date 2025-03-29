@@ -66,7 +66,8 @@ class MenuManager:
         self.recorder_manager = RecorderManager(
             tts_manager=self.tts_manager,
             base_dir=self.records_dir,
-            debug=self.debug
+            debug=self.debug,
+            settings_manager=settings_manager
         )
         
         # Инициализация менеджера воспроизведения
