@@ -759,39 +759,134 @@ class RecorderManager:
             **kwargs: Параметры события
         """
         try:
+            # Логируем получение события
+            sentry_sdk.add_breadcrumb(
+                category="recorder_monitoring",
+                message=f"Получено событие отключения USB микрофона с параметрами: {kwargs}",
+                level="info"
+            )
+            
             if self.debug:
                 print("RecorderManager: Получено событие отключения USB микрофона")
             
             # Проверяем, идет ли запись
             if self.is_recording():
+                # Логируем необходимость остановки записи
+                sentry_sdk.add_breadcrumb(
+                    category="recorder_monitoring",
+                    message="Запись активна, необходимо остановить и сохранить запись",
+                    level="warning"
+                )
+                
                 if self.debug:
                     print("RecorderManager: Запись активна, останавливаем и сохраняем")
                 
                 # Воспроизводим сообщение
-                self._play_notification_message("USB микрофон отключен. Останавливаем запись...")
+                try:
+                    self._play_notification_message("USB микрофон отключен. Останавливаем запись...")
+                except Exception as notification_error:
+                    error_msg = f"Ошибка при воспроизведении уведомления об отключении микрофона: {notification_error}"
+                    print(error_msg)
+                    sentry_sdk.capture_exception(notification_error)
                 
                 # Останавливаем запись с сохранением файла
-                saved_file = self.stop_recording_with_notification(
-                    "Запись сохранена после отключения USB микрофона", 
-                    publish_event=True
+                try:
+                    saved_file = self.stop_recording_with_notification(
+                        "Запись сохранена после отключения USB микрофона", 
+                        publish_event=True
+                    )
+                    
+                    if saved_file:
+                        # Логируем успешное сохранение
+                        sentry_sdk.add_breadcrumb(
+                            category="recorder_monitoring",
+                            message=f"Запись успешно сохранена в файл: {saved_file}",
+                            level="info"
+                        )
+                        
+                        if self.debug:
+                            print(f"RecorderManager: Запись сохранена в файл {saved_file}")
+                    else:
+                        # Логируем ошибку сохранения
+                        sentry_sdk.add_breadcrumb(
+                            category="recorder_monitoring",
+                            message="Не удалось сохранить запись после отключения USB микрофона",
+                            level="error"
+                        )
+                        sentry_sdk.capture_message(
+                            "Ошибка сохранения записи после отключения USB микрофона",
+                            level="error"
+                        )
+                        
+                        if self.debug:
+                            print("RecorderManager: Не удалось сохранить запись")
+                except Exception as stop_error:
+                    error_msg = f"Ошибка при остановке и сохранении записи: {stop_error}"
+                    print(error_msg)
+                    sentry_sdk.capture_exception(stop_error)
+                    
+                    # Пытаемся принудительно остановить запись в случае ошибки
+                    try:
+                        if hasattr(self, 'recorder') and self.recorder.is_active():
+                            self.recorder.stop_recording()
+                            sentry_sdk.add_breadcrumb(
+                                category="recorder_monitoring",
+                                message="Выполнена принудительная остановка записи после ошибки",
+                                level="warning"
+                            )
+                    except Exception as force_stop_error:
+                        error_msg = f"Ошибка при принудительной остановке записи: {force_stop_error}"
+                        print(error_msg)
+                        sentry_sdk.capture_exception(force_stop_error)
+                    
+                    # Публикуем событие об ошибке
+                    try:
+                        self.event_bus.publish(
+                            EVENT_RECORDING_FAILED,
+                            error=str(stop_error)
+                        )
+                    except Exception as event_error:
+                        error_msg = f"Ошибка при публикации события о неудачной записи: {event_error}"
+                        print(error_msg)
+                        sentry_sdk.capture_exception(event_error)
+            else:
+                # Логируем отсутствие необходимости действий
+                sentry_sdk.add_breadcrumb(
+                    category="recorder_monitoring",
+                    message="Запись не активна, событие отключения USB микрофона игнорируется",
+                    level="info"
                 )
                 
-                if self.debug:
-                    print(f"RecorderManager: Запись сохранена в файл {saved_file}")
-            else:
                 if self.debug:
                     print("RecorderManager: Запись не активна, событие игнорируется")
                 
                 # Публикуем событие о завершенной записи, чтобы MicrophoneSelector мог продолжить
-                self.event_bus.publish(EVENT_RECORDING_SAVED)
+                try:
+                    self.event_bus.publish(EVENT_RECORDING_SAVED)
+                    
+                    # Логируем публикацию события
+                    sentry_sdk.add_breadcrumb(
+                        category="recorder_monitoring",
+                        message="Опубликовано событие EVENT_RECORDING_SAVED для продолжения работы MicrophoneSelector",
+                        level="info"
+                    )
+                except Exception as event_error:
+                    error_msg = f"Ошибка при публикации события о завершении записи: {event_error}"
+                    print(error_msg)
+                    sentry_sdk.capture_exception(event_error)
             
         except Exception as e:
-            error_msg = f"Ошибка при обработке отключения USB микрофона: {e}"
+            error_msg = f"Критическая ошибка при обработке отключения USB микрофона: {e}"
             print(error_msg)
             sentry_sdk.capture_exception(e)
             
             # Публикуем событие об ошибке
-            self.event_bus.publish(EVENT_RECORDING_FAILED, error=str(e))
+            try:
+                self.event_bus.publish(EVENT_RECORDING_FAILED, error=str(e))
+            except Exception as event_error:
+                error_msg = f"Ошибка при публикации события о неудачной обработке: {event_error}"
+                print(error_msg)
+                sentry_sdk.capture_exception(event_error)
     
     def stop_recording_with_notification(self, message="Запись сохранена", publish_event=False):
         """
@@ -805,45 +900,109 @@ class RecorderManager:
             str: Путь к сохраненному файлу или None в случае ошибки
         """
         try:
+            # Логируем начало процесса
+            sentry_sdk.add_breadcrumb(
+                category="recorder_monitoring",
+                message=f"Начало остановки записи с уведомлением: {message}, publish_event={publish_event}",
+                level="info"
+            )
+            
             # Останавливаем запись
             saved_file = self.stop_recording()
             
             if saved_file:
+                # Логируем успешное сохранение
+                sentry_sdk.add_breadcrumb(
+                    category="recorder_monitoring",
+                    message=f"Запись успешно сохранена в файл: {saved_file}",
+                    level="info"
+                )
+                
                 # Воспроизводим сообщение
-                self._play_notification_message(message)
+                try:
+                    self._play_notification_message(message)
+                except Exception as notification_error:
+                    error_msg = f"Ошибка при воспроизведении уведомления: {notification_error}"
+                    print(error_msg)
+                    sentry_sdk.capture_exception(notification_error)
                 
                 # Публикуем событие о сохранении записи, если нужно
                 if publish_event:
-                    self.event_bus.publish(
-                        EVENT_RECORDING_SAVED,
-                        saved_file=saved_file
-                    )
+                    try:
+                        self.event_bus.publish(
+                            EVENT_RECORDING_SAVED,
+                            saved_file=saved_file
+                        )
+                        
+                        # Логируем публикацию события
+                        sentry_sdk.add_breadcrumb(
+                            category="recorder_monitoring",
+                            message=f"Опубликовано событие EVENT_RECORDING_SAVED, saved_file={saved_file}",
+                            level="info"
+                        )
+                    except Exception as event_error:
+                        error_msg = f"Ошибка при публикации события о сохранении записи: {event_error}"
+                        print(error_msg)
+                        sentry_sdk.capture_exception(event_error)
                 
                 return saved_file
             else:
+                # Логируем ошибку сохранения
+                sentry_sdk.add_breadcrumb(
+                    category="recorder_monitoring",
+                    message="Не удалось сохранить запись",
+                    level="error"
+                )
+                sentry_sdk.capture_message(
+                    "Ошибка сохранения записи в методе stop_recording_with_notification",
+                    level="error"
+                )
+                
                 # Если сохранение не удалось, воспроизводим сообщение об ошибке
-                self._play_notification_message("Ошибка при сохранении записи")
+                try:
+                    self._play_notification_message("Ошибка при сохранении записи")
+                except Exception as notification_error:
+                    error_msg = f"Ошибка при воспроизведении уведомления об ошибке: {notification_error}"
+                    print(error_msg)
+                    sentry_sdk.capture_exception(notification_error)
                 
                 # Публикуем событие об ошибке, если нужно
                 if publish_event:
-                    self.event_bus.publish(
-                        EVENT_RECORDING_FAILED,
-                        error="Не удалось сохранить запись"
-                    )
+                    try:
+                        self.event_bus.publish(
+                            EVENT_RECORDING_FAILED,
+                            error="Не удалось сохранить запись"
+                        )
+                        
+                        # Логируем публикацию события
+                        sentry_sdk.add_breadcrumb(
+                            category="recorder_monitoring",
+                            message="Опубликовано событие EVENT_RECORDING_FAILED",
+                            level="error"
+                        )
+                    except Exception as event_error:
+                        error_msg = f"Ошибка при публикации события о неудачной записи: {event_error}"
+                        print(error_msg)
+                        sentry_sdk.capture_exception(event_error)
                 
                 return None
                 
         except Exception as e:
-            error_msg = f"Ошибка при остановке записи с уведомлением: {e}"
+            error_msg = f"Критическая ошибка при остановке записи с уведомлением: {e}"
             print(error_msg)
             sentry_sdk.capture_exception(e)
             
             # Публикуем событие об ошибке, если нужно
             if publish_event:
-                self.event_bus.publish(
-                    EVENT_RECORDING_FAILED,
-                    error=str(e)
-                )
+                try:
+                    self.event_bus.publish(
+                        EVENT_RECORDING_FAILED,
+                        error=str(e)
+                    )
+                except Exception as event_error:
+                    error_msg = f"Ошибка при публикации события о критической ошибке: {event_error}"
+                    print(error_msg)
+                    sentry_sdk.capture_exception(event_error)
                 
             return None
     
@@ -855,6 +1014,13 @@ class RecorderManager:
             message (str): Текст сообщения
         """
         try:
+            # Логируем начало воспроизведения
+            sentry_sdk.add_breadcrumb(
+                category="recorder_monitoring",
+                message=f"Воспроизведение системного сообщения: {message}",
+                level="info"
+            )
+            
             if self.tts_manager:
                 voice_id = self.settings_manager.get_voice() if hasattr(self, 'settings_manager') else None
                 self.tts_manager.play_speech(message, voice_id=voice_id)

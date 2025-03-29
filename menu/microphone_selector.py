@@ -91,20 +91,46 @@ class MicrophoneSelector:
                 
                 # Если состояние изменилось
                 if current_usb_state != last_usb_state:
+                    # Логируем изменение состояния в Sentry
+                    sentry_sdk.add_breadcrumb(
+                        category="microphone_monitoring",
+                        message=f"Изменение состояния USB микрофона: {last_usb_state} -> {current_usb_state}",
+                        level="info"
+                    )
+                    
                     if self.debug:
                         print(f"Изменение состояния USB микрофона: {last_usb_state} -> {current_usb_state}")
                     
                     # Если USB микрофон был отключен, и он был выбран
                     if not current_usb_state and self.get_microphone() == "usb":
+                        # Логируем событие отключения микрофона во время использования
+                        sentry_sdk.add_breadcrumb(
+                            category="microphone_monitoring",
+                            message="USB микрофон был отключен во время использования",
+                            level="warning"
+                        )
+                        
                         if self.debug:
                             print("USB микрофон был отключен, и он был выбран")
                         
                         # Публикуем событие отключения USB микрофона
                         # Другие компоненты (RecorderManager) могут подписаться на это событие
-                        event_bus.publish(
-                            EVENT_USB_MIC_DISCONNECTED,
-                            microphone_selector=self
-                        )
+                        try:
+                            event_bus.publish(
+                                EVENT_USB_MIC_DISCONNECTED,
+                                microphone_selector=self
+                            )
+                            
+                            # Логируем успешную публикацию события
+                            sentry_sdk.add_breadcrumb(
+                                category="microphone_monitoring",
+                                message="Успешно опубликовано событие EVENT_USB_MIC_DISCONNECTED",
+                                level="info"
+                            )
+                        except Exception as event_publish_error:
+                            error_msg = f"Ошибка при публикации события отключения USB микрофона: {event_publish_error}"
+                            print(error_msg)
+                            sentry_sdk.capture_exception(event_publish_error)
                         
                         # Устанавливаем флаг ожидания сохранения записи
                         # Теперь мы не будем сразу переключать микрофон и возвращаться в главное меню
@@ -114,10 +140,20 @@ class MicrophoneSelector:
                         # Если запись не активна, сразу переключаемся на встроенный микрофон
                         # RecorderManager должен сам определить, была ли активна запись
                         if not self.waiting_for_recording_save:
-                            self._switch_to_built_in_microphone()
+                            try:
+                                self._switch_to_built_in_microphone()
+                            except Exception as switch_error:
+                                error_msg = f"Ошибка при переключении на встроенный микрофон: {switch_error}"
+                                print(error_msg)
+                                sentry_sdk.capture_exception(switch_error)
                     
                     # Обновляем отображение меню
-                    self._setup_menu_items()
+                    try:
+                        self._setup_menu_items()
+                    except Exception as menu_update_error:
+                        error_msg = f"Ошибка при обновлении меню после изменения состояния микрофона: {menu_update_error}"
+                        print(error_msg)
+                        sentry_sdk.capture_exception(menu_update_error)
                     
                     # Обновляем последнее состояние
                     last_usb_state = current_usb_state
@@ -141,6 +177,13 @@ class MicrophoneSelector:
             **kwargs: Параметры события
         """
         try:
+            # Логируем получение события
+            sentry_sdk.add_breadcrumb(
+                category="microphone_monitoring",
+                message=f"Получено событие о завершении записи с параметрами: {kwargs}",
+                level="info"
+            )
+            
             if self.debug:
                 print("MicrophoneSelector: Получено событие о завершении записи")
             
@@ -149,6 +192,13 @@ class MicrophoneSelector:
             
             # Переключаемся на встроенный микрофон и возвращаемся в главное меню
             self._switch_to_built_in_microphone()
+            
+            # Логируем успешное завершение обработки события
+            sentry_sdk.add_breadcrumb(
+                category="microphone_monitoring",
+                message="Успешно обработано событие завершения записи",
+                level="info"
+            )
             
         except Exception as e:
             error_msg = f"Ошибка при обработке события сохранения записи: {e}"
@@ -160,11 +210,25 @@ class MicrophoneSelector:
         Переключение на встроенный микрофон и возврат в главное меню
         """
         try:
+            # Логируем начало процесса переключения
+            sentry_sdk.add_breadcrumb(
+                category="microphone_monitoring",
+                message="Начало переключения на встроенный микрофон после отключения USB микрофона",
+                level="info"
+            )
+            
             if self.debug:
                 print("Переключение на встроенный микрофон после отключения USB микрофона")
             
             # Принудительно переключаемся на встроенный микрофон
             self.change_microphone("built_in", force=True)
+            
+            # Логируем успешное переключение
+            sentry_sdk.add_breadcrumb(
+                category="microphone_monitoring",
+                message="Успешное переключение на встроенный микрофон",
+                level="info"
+            )
             
         except Exception as e:
             error_msg = f"Ошибка при переключении на встроенный микрофон: {e}"
@@ -184,12 +248,22 @@ class MicrophoneSelector:
             
             # Проверяем результат выполнения команды
             if result.returncode != 0:
+                # Логируем ошибку выполнения команды
+                sentry_sdk.add_breadcrumb(
+                    category="microphone_monitoring",
+                    message=f"Ошибка при выполнении arecord -l: {result.stderr}",
+                    level="error"
+                )
+                
                 if self.debug:
                     print(f"Ошибка при выполнении arecord -l: {result.stderr}")
                 return False
             
             # Ищем в выводе USB микрофон
-            return "(LCS) USB Audio Device" in result.stdout
+            is_connected = "(LCS) USB Audio Device" in result.stdout
+            
+            # Не логируем каждый успешный вызов, чтобы не засорять логи
+            return is_connected
         except Exception as e:
             error_msg = f"Ошибка при проверке подключения USB микрофона: {e}"
             print(error_msg)

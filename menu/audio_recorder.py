@@ -9,6 +9,8 @@ import soundfile as sf
 import subprocess
 import shutil
 import sentry_sdk
+import psutil
+import platform
 
 class AudioRecorder:
     """Класс для записи аудио с микрофона, использующий sounddevice"""
@@ -105,73 +107,111 @@ class AudioRecorder:
     
     def start_recording(self, folder):
         """
-        Начинает запись аудио в указанную папку
+        Запускает запись аудио
         
         Args:
-            folder (str): Папка для сохранения записи (A, B или C)
+            folder (str): Папка для сохранения записи (A, B, C)
             
         Returns:
-            bool: True, если запись успешно начата, False в противном случае
+            bool: True если запись успешно начата, False в случае ошибки
         """
-        with self.lock:
-            if self.is_recording:
+        try:
+            if self.debug:
+                print(f"Запуск записи в папку {folder}")
+                
+            if self.is_active():
                 if self.debug:
-                    print("Запись уже идёт")
+                    print("Запись уже запущена, останавливаем предыдущую")
+                    
+                # Останавливаем предыдущую запись
+                self.stop_recording()
+            
+            # Проверяем свободное место
+            if not self._check_disk_space():
+                # Добавляем информацию в Sentry
+                sentry_sdk.add_breadcrumb(
+                    category="audio_recorder",
+                    message="Недостаточно места на диске для записи",
+                    level="error"
+                )
+                sentry_sdk.capture_message(
+                    "Недостаточно места на диске для записи", 
+                    level="error"
+                )
+                
                 return False
             
+            # Получаем устройство для записи
             try:
-                # Проверяем наличие свободного места
-                has_space, free_space = self.check_disk_space()
-                if not has_space:
-                    warning_msg = f"Недостаточно свободного места на диске: {free_space / (1024*1024*1024):.2f} GB"
-                    print(warning_msg)
-                    # Если метод вернул False, обработчик должен отобразить предупреждение
-                    # но запись все равно начнем
+                # Логируем информацию о выбранном микрофоне
+                sentry_sdk.add_breadcrumb(
+                    category="audio_recorder",
+                    message=f"Получение устройства записи для микрофона: {self.settings_manager.get_microphone()}",
+                    level="info"
+                )
                 
-                self.current_folder = folder
-                self.is_paused = False
-                self.total_pause_time = 0
-                self.audio_data = []
+                self.device_id = self._get_selected_microphone_device()
+                if self.debug:
+                    print(f"Выбрано устройство: {self.device_id}")
+            except Exception as device_error:
+                error_msg = f"Ошибка при получении устройства записи: {device_error}"
+                print(error_msg)
+                sentry_sdk.capture_exception(device_error)
+                return False
+            
+            # Создаем директорию для записей, если она не существует
+            self.folder = folder
+            
+            # Формируем имя файла на основе текущей даты и времени
+            self.output_file = self._generate_file_name()
+            if self.debug:
+                print(f"Имя файла для записи: {self.output_file}")
                 
-                # Генерируем имя файла для записи
-                filename = self._generate_filename()
-                folder_path = os.path.join(self.base_dir, folder)
-                self.output_file = os.path.join(folder_path, filename)
+            try:
+                # Определяем параметры записи
+                sample_rate = self._get_supported_sample_rate(self.device_id)
+                channels = self._get_supported_channels(self.device_id)
+                
+                # Логируем параметры записи
+                sentry_sdk.add_breadcrumb(
+                    category="audio_recorder",
+                    message=f"Параметры записи: устройство={self.device_id}, частота={sample_rate}, каналы={channels}",
+                    level="info"
+                )
                 
                 if self.debug:
-                    print(f"Начинаем запись в файл: {self.output_file}")
-                
-                # Устанавливаем флаги записи
-                self.is_recording = True
-                self.start_time = time.time()
-                self.stop_timer = False
+                    print(f"Параметры записи: частота={sample_rate}, каналы={channels}")
                 
                 # Запускаем запись в отдельном потоке
-                self.recording_thread = threading.Thread(target=self._record_audio)
+                self.recording_thread = threading.Thread(
+                    target=self._record_audio,
+                    args=(sample_rate, channels)
+                )
                 self.recording_thread.daemon = True
+                self.recording_active = True
+                self.recording_paused = False
                 self.recording_thread.start()
                 
-                # Запускаем таймер в отдельном потоке
-                self.timer_thread = threading.Thread(target=self._update_timer)
+                # Запускаем отдельный поток для отслеживания времени
+                self.timer_thread = threading.Thread(target=self._timer_loop)
                 self.timer_thread.daemon = True
                 self.timer_thread.start()
                 
-                # Запускаем монитор длительности записи
-                self.duration_monitor_thread = threading.Thread(target=self._monitor_recording_duration)
-                self.duration_monitor_thread.daemon = True
-                self.duration_monitor_thread.start()
-                
                 if self.debug:
-                    print(f"Запись начата в папку {folder}")
-                
+                    print("Запись успешно запущена")
+                    
                 return True
-            except Exception as e:
-                error_msg = f"Ошибка при начале записи: {e}"
+            except Exception as start_error:
+                error_msg = f"Ошибка при запуске записи: {start_error}"
                 print(error_msg)
-                sentry_sdk.capture_exception(e)
-                self._clean_up()
+                sentry_sdk.capture_exception(start_error)
                 return False
-                
+        except Exception as e:
+            error_msg = f"Критическая ошибка при запуске записи: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return False
+    
     def _monitor_recording_duration(self):
         """Мониторит длительность записи и автоматически останавливает при превышении максимальной длительности"""
         try:
@@ -208,7 +248,7 @@ class AudioRecorder:
         # Возвращаем None, так как путь будет возвращен в методе stop_recording
         return None
     
-    def _record_audio(self):
+    def _record_audio(self, sample_rate, channels):
         """Записывает аудио в отдельном потоке"""
         try:
             def callback(indata, frames, time, status):
@@ -223,13 +263,7 @@ class AudioRecorder:
                         sentry_sdk.capture_exception(e)
             
             # Получаем ID устройства микрофона из настроек
-            device_id = self._get_selected_microphone_device()
-            
-            # Определяем поддерживаемую частоту дискретизации для устройства
-            sample_rate = self._get_supported_sample_rate(device_id)
-            
-            # Определяем количество каналов для устройства
-            channels = self._get_supported_channels(device_id)
+            device_id = self.device_id
             
             if self.debug:
                 print(f"Запуск записи с микрофона device_id={device_id}, sample_rate={sample_rate}, channels={channels}")
@@ -250,56 +284,103 @@ class AudioRecorder:
     
     def _get_selected_microphone_device(self):
         """
-        Определяет ID устройства микрофона на основе настроек.
-        Использует непосредственно идентификаторы sounddevice.
+        Возвращает идентификатор устройства выбранного микрофона
         
         Returns:
-            int or str: ID устройства для sounddevice
+            str/int: Идентификатор устройства или None для использования устройства по умолчанию
         """
         try:
-            # Получаем список устройств sounddevice
+            # Получаем текущий выбранный микрофон из настроек
+            microphone = self.settings_manager.get_microphone()
+            
+            # Логируем информацию о микрофоне из настроек
+            sentry_sdk.add_breadcrumb(
+                category="audio_recorder",
+                message=f"Получение устройства для микрофона из настроек: {microphone}",
+                level="info"
+            )
+            
+            # Выводим список устройств для отладки и логирования
+            input_devices = sd.query_devices()
             if self.debug:
-                print("Получение списка устройств ввода sounddevice:")
-                for i, device in enumerate(sd.query_devices()):
-                    print(f"Device {i}: {device['name']} - {device}")
+                print("Доступные аудиоустройства:")
+                for i, device in enumerate(input_devices):
+                    print(f"{i}: {device['name']} (in={device['max_input_channels']}, out={device['max_output_channels']})")
             
-            # Если нет менеджера настроек, используем встроенный микрофон по умолчанию
-            if not self.settings_manager:
-                if self.debug:
-                    print("Нет доступа к настройкам, используем встроенный микрофон по умолчанию")
-                return self._find_sounddevice_mic(self.BUILT_IN_MIC_MARKER)
+            # Логируем список устройств в Sentry
+            devices_info = [f"{i}: {d['name']} (in={d['max_input_channels']})" 
+                           for i, d in enumerate(input_devices) if d['max_input_channels'] > 0]
+            sentry_sdk.add_breadcrumb(
+                category="audio_recorder",
+                message=f"Доступные устройства записи: {', '.join(devices_info)}",
+                level="info"
+            )
             
-            # Получаем настройку микрофона
-            microphone_setting = self.settings_manager.get_microphone()
-            
-            if self.debug:
-                print(f"Настройка микрофона из settings.json: {microphone_setting}")
-            
-            # Если выбран USB микрофон
-            if microphone_setting == "usb":
-                # Находим USB микрофон в списке устройств sounddevice
-                usb_mic_id = self._find_sounddevice_mic(self.USB_MIC_MARKER)
+            # Ищем устройство, соответствующее выбранному микрофону
+            if microphone == "built_in":
+                # Для встроенного микрофона ищем устройство без "USB" в названии
+                device_id = self._find_sounddevice_mic("bcm2835")
                 
-                # Если найден, используем его
-                if usb_mic_id is not None:
+                if device_id is not None:
                     if self.debug:
-                        print(f"Найден USB микрофон, используем device_id={usb_mic_id}")
-                    return usb_mic_id
+                        print(f"Найдено устройство для встроенного микрофона: {device_id}")
+                    return device_id
+                else:
+                    # Если не найдено, используем устройство по умолчанию
+                    if self.debug:
+                        print("Устройство для встроенного микрофона не найдено, используем устройство по умолчанию")
+                    
+                    # Логируем предупреждение
+                    sentry_sdk.add_breadcrumb(
+                        category="audio_recorder",
+                        message="Устройство для встроенного микрофона не найдено, используем устройство по умолчанию",
+                        level="warning"
+                    )
+                    
+                    return None
+            elif microphone == "usb":
+                # Для USB микрофона ищем устройство с "USB" в названии
+                device_id = self._find_sounddevice_mic("USB")
                 
-                # Если USB микрофон не найден, используем встроенный
+                if device_id is not None:
+                    if self.debug:
+                        print(f"Найдено устройство для USB микрофона: {device_id}")
+                    return device_id
+                else:
+                    # Если не найдено, используем устройство по умолчанию
+                    if self.debug:
+                        print("Устройство для USB микрофона не найдено, используем устройство по умолчанию")
+                    
+                    # Логируем предупреждение
+                    sentry_sdk.add_breadcrumb(
+                        category="audio_recorder",
+                        message="Устройство для USB микрофона не найдено, используем устройство по умолчанию",
+                        level="warning"
+                    )
+                    sentry_sdk.capture_message(
+                        "USB микрофон выбран в настройках, но не найден в системе",
+                        level="warning"
+                    )
+                    
+                    return None
+            else:
+                # Неизвестный тип микрофона, используем устройство по умолчанию
                 if self.debug:
-                    print("USB микрофон выбран в настройках, но не подключен. Используем встроенный микрофон.")
-                return self._find_sounddevice_mic(self.BUILT_IN_MIC_MARKER)
-            
-            # Если выбран встроенный микрофон
-            return self._find_sounddevice_mic(self.BUILT_IN_MIC_MARKER)
-            
+                    print(f"Неизвестный тип микрофона: {microphone}, используем устройство по умолчанию")
+                    
+                # Логируем предупреждение
+                sentry_sdk.add_breadcrumb(
+                    category="audio_recorder",
+                    message=f"Неизвестный тип микрофона: {microphone}, используем устройство по умолчанию",
+                    level="warning"
+                )
+                
+                return None
         except Exception as e:
-            error_msg = f"Ошибка при определении устройства микрофона: {e}"
+            error_msg = f"Ошибка при получении устройства микрофона: {e}"
             print(error_msg)
             sentry_sdk.capture_exception(e)
-            # По умолчанию используем устройство по умолчанию
-            return None  # None означает использовать устройство по умолчанию
+            return None
     
     def _find_sounddevice_mic(self, marker):
         """
@@ -409,98 +490,118 @@ class AudioRecorder:
     
     def stop_recording(self):
         """
-        Останавливает запись и сохраняет аудиофайл
+        Останавливает запись и сохраняет файл
         
         Returns:
             str: Путь к сохраненному файлу или None в случае ошибки
         """
-        with self.lock:
-            if not self.is_recording:
+        try:
+            if not self.is_active():
                 if self.debug:
-                    print("Невозможно остановить запись: запись не активна")
+                    print("Запись не активна, нечего останавливать")
                 return None
                 
-            try:
+            # Логируем остановку записи
+            sentry_sdk.add_breadcrumb(
+                category="audio_recorder",
+                message="Остановка записи",
+                level="info"
+            )
+            
+            # Устанавливаем флаг остановки
+            self.recording_active = False
+            
+            # Если запись на паузе, возобновляем её для корректной остановки
+            if self.recording_paused:
+                self.recording_paused = False
                 if self.debug:
-                    print("Останавливаем запись...")
+                    print("Снятие с паузы перед остановкой")
+            
+            # Ждем завершения потока записи
+            if hasattr(self, 'recording_thread') and self.recording_thread and self.recording_thread.is_alive():
+                if self.debug:
+                    print("Ожидание завершения потока записи...")
+                self.recording_thread.join(timeout=5.0)
                 
-                # Останавливаем запись
-                self.is_recording = False
-                
-                # Ждем завершения потока записи
-                if self.recording_thread and self.recording_thread.is_alive():
-                    self.recording_thread.join(timeout=2)
-                
-                # Останавливаем таймер
-                self.stop_timer = True
-                if self.timer_thread and self.timer_thread.is_alive():
-                    self.timer_thread.join(timeout=1)
-                
-                # Если нет данных для сохранения
-                if not self.audio_data:
-                    warning_msg = "Нет данных для сохранения"
+                if self.recording_thread.is_alive():
+                    # Если поток не завершился, это может быть проблемой
+                    warning_msg = "Поток записи не завершился вовремя"
                     print(warning_msg)
-                    
-                    return None
+                    sentry_sdk.capture_message(warning_msg, level="warning")
+            
+            # Останавливаем таймер
+            if hasattr(self, 'timer_thread') and self.timer_thread and self.timer_thread.is_alive():
+                if self.debug:
+                    print("Ожидание завершения потока таймера...")
+                self.timer_active = False
+                self.timer_thread.join(timeout=2.0)
+            
+            # Проверяем, был ли создан выходной файл
+            if hasattr(self, 'output_file') and self.output_file:
+                output_path = self.output_file
                 
-                try:
-                    # Создаем директорию для сохранения, если она не существует
-                    os.makedirs(os.path.dirname(self.output_file), exist_ok=True)
-                    
-                    # Объединяем все части записи
-                    if self.debug:
-                        print(f"Сохраняем запись в файл: {self.output_file}")
-                        print(f"Количество блоков данных: {len(self.audio_data)}")
-                    
-                    data = np.concatenate(self.audio_data, axis=0)
-                    
-                    # Проверяем свободное место перед сохранением
-                    required_space = data.nbytes + 1024*1024  # Размер данных + 1MB запаса
-                    has_space, free_space = self.check_disk_space()
-                    
-                    if free_space and free_space < required_space:
-                        warning_msg = f"Критически мало места на диске: {free_space / (1024*1024*1024):.2f} GB. Требуется {required_space / (1024*1024*1024):.2f} GB"
-                        print(warning_msg)
-                        sentry_sdk.capture_message(warning_msg, level="warning")
-                    
-                    # Получаем фактическую частоту дискретизации и количество каналов из устройства
-                    device_id = self._get_selected_microphone_device()
-                    rate = self._get_supported_sample_rate(device_id)
-                    
-                    # Преобразуем многоканальные данные в моно для сохранения, если нужно
-                    if data.shape[1] > 1:
+                if os.path.exists(output_path):
+                    # Если запись была слишком короткой (менее 1 секунды), удаляем файл
+                    if os.path.getsize(output_path) < 10000:  # Примерно 1 секунда в WAV
                         if self.debug:
-                            print(f"Преобразуем {data.shape[1]} каналов в моно для сохранения")
-                        # Усредняем все каналы для получения моно
-                        data = np.mean(data, axis=1, keepdims=True)
-                    
-                    # Записываем файл с правильной частотой дискретизации
-                    sf.write(self.output_file, data, rate)
-                    
-                    if self.debug:
-                        print(f"Запись успешно сохранена в файл: {self.output_file} с частотой {rate} Гц")
-                    
-                    # Возвращаем путь к сохраненному файлу
-                    saved_file = self.output_file
-                    
-                    # Очищаем ресурсы
-                    self._clean_up()
-                    
-                    return saved_file
-                    
-                except OSError as e:
-                    error_msg = f"Ошибка ввода-вывода при сохранении файла: {e}"
+                            print(f"Запись слишком короткая, удаляем файл: {output_path}")
+                        os.remove(output_path)
+                        
+                        # Логируем удаление короткой записи
+                        sentry_sdk.add_breadcrumb(
+                            category="audio_recorder",
+                            message=f"Удалена слишком короткая запись: {output_path}",
+                            level="warning"
+                        )
+                        
+                        return None
+                    else:
+                        if self.debug:
+                            print(f"Запись успешно сохранена: {output_path}")
+                            
+                        # Сбрасываем текущее время записи
+                        self.current_time = 0
+                        
+                        # Логируем успешное сохранение файла
+                        sentry_sdk.add_breadcrumb(
+                            category="audio_recorder",
+                            message=f"Запись успешно сохранена: {output_path}, размер: {os.path.getsize(output_path)} байт",
+                            level="info"
+                        )
+                        
+                        return output_path
+                else:
+                    # Если файл не был создан, это ошибка
+                    error_msg = f"Файл записи не найден: {output_path}"
                     print(error_msg)
-                    sentry_sdk.capture_exception(e)
-                    self._clean_up()
-                    return None
                     
-            except Exception as e:
-                error_msg = f"Ошибка при остановке и сохранении записи: {e}"
-                print(error_msg)
-                sentry_sdk.capture_exception(e)
-                self._clean_up()
+                    # Логируем ошибку
+                    sentry_sdk.add_breadcrumb(
+                        category="audio_recorder",
+                        message=error_msg,
+                        level="error"
+                    )
+                    sentry_sdk.capture_message(error_msg, level="error")
+                    
+                    return None
+            else:
+                # Если не было имени файла, значит запись не успела начаться
+                if self.debug:
+                    print("Запись не успела начаться")
+                    
+                # Логируем ошибку
+                sentry_sdk.add_breadcrumb(
+                    category="audio_recorder",
+                    message="Запись не успела начаться, нет имени выходного файла",
+                    level="warning"
+                )
+                
                 return None
+        except Exception as e:
+            error_msg = f"Ошибка при остановке записи: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            return None
     
     def cancel_recording(self):
         """
