@@ -211,10 +211,10 @@ class RecorderManager:
                 if os.path.exists(self.beep_sound_path):
                     if self.debug:
                         print("Воспроизведение звукового сигнала...")
-                    subprocess.run(["aplay", self.beep_sound_path], 
-                                  check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    # Убедимся, что звук проиграл до конца
-                    time.sleep(0.5)
+                    
+                    # Используем новую функцию для воспроизведения звука с регулируемой громкостью
+                    self.play_sound_with_volume(self.beep_sound_path)
+                    
             except Exception as beep_error:
                 print(f"Ошибка при воспроизведении звукового сигнала: {beep_error}")
                 sentry_sdk.capture_exception(beep_error)
@@ -296,8 +296,8 @@ class RecorderManager:
             
             # Если TTS недоступен, используем aplay для воспроизведения звука
             try:
-                subprocess.run(["aplay", "/home/aleks/main-sounds/beep.wav"], 
-                               check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                # Используем новую функцию для воспроизведения звука с регулируемой громкостью
+                self.play_sound_with_volume("/home/aleks/main-sounds/beep.wav")
                 return True
             except Exception as sound_error:
                 print(f"Ошибка при воспроизведении звука: {sound_error}")
@@ -866,3 +866,55 @@ class RecorderManager:
             error_msg = f"Ошибка при воспроизведении системного сообщения: {e}"
             print(error_msg)
             sentry_sdk.capture_exception(e)
+    
+    def play_sound_with_volume(self, sound_file):
+        """
+        Воспроизводит звуковой сигнал с учетом системной громкости
+        
+        Args:
+            sound_file (str): Путь к звуковому файлу
+            
+        Returns:
+            bool: True если звук успешно воспроизведен, иначе False
+        """
+        try:
+            if not os.path.exists(sound_file):
+                if self.debug:
+                    print(f"Звуковой файл не найден: {sound_file}")
+                return False
+                
+            # Получаем текущую громкость системных сообщений
+            volume = 100
+            if self.settings_manager:
+                volume = self.settings_manager.get_system_volume()
+            
+            # Уменьшаем громкость на 20% для звука beep
+            volume = max(10, int(volume * 0.7))
+            
+            # Преобразуем проценты в значение для paplay (0-65536)
+            paplay_volume = int(volume * 65536 / 100)
+            
+            if self.debug:
+                print(f"Воспроизведение звука с громкостью {volume}% ({paplay_volume}): {sound_file}")
+                
+            # Используем paplay для воспроизведения с регулировкой громкости
+            subprocess.run(["paplay", "--volume", str(paplay_volume), sound_file], 
+                           check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            
+            # Добавляем небольшую паузу для завершения воспроизведения
+            time.sleep(0.5)
+            
+            return True
+        except Exception as e:
+            error_msg = f"Ошибка при воспроизведении звукового сигнала: {e}"
+            print(error_msg)
+            sentry_sdk.capture_exception(e)
+            
+            # В случае ошибки пытаемся воспроизвести звук обычным способом
+            try:
+                subprocess.run(["aplay", sound_file], 
+                              check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                time.sleep(0.5)
+                return True
+            except:
+                return False
