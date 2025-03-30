@@ -10,6 +10,7 @@ from google.cloud import texttospeech
 from google.cloud import monitoring_v3
 import io
 import sentry_sdk
+import re
 
 class GoogleTTSManager:
     """Управление озвучкой текста с помощью Google Cloud Text-to-Speech API"""
@@ -495,6 +496,43 @@ class GoogleTTSManager:
             print("mpg123 не найден, конвертация невозможна")
             return None
     
+    def _preprocess_text(self, text):
+        """
+        Предварительная обработка текста перед отправкой в Google Cloud TTS
+        
+        Args:
+            text (str): Исходный текст
+            
+        Returns:
+            str: Обработанный текст
+        """
+        if not text:
+            return text
+            
+        # Удаляем расширения файлов (.mp3, .wav, .ogg, .txt и другие)
+        # Ищем шаблоны типа "filename.ext" и заменяем на "filename"
+        common_extensions = ['.mp3', '.wav', '.ogg', '.txt', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.jpg', '.jpeg', '.png', '.gif']
+        processed_text = text
+        
+        # Заменяем конкретные расширения файлов на пробел
+        for ext in common_extensions:
+            processed_text = processed_text.replace(ext, ' ')
+        
+        # Используем регулярное выражение для более общего случая
+        # Ищем паттерн "что-то.расширение" где расширение 2-4 символа
+        processed_text = re.sub(r'(\w+)(\.\w{2,4})\b', r'\1', processed_text)
+        
+        # Заменяем тире и нижнее подчеркивание на пробелы
+        processed_text = processed_text.replace('-', ' ').replace('_', ' ')
+        
+        # Удаляем лишние пробелы (несколько пробелов заменяем на один)
+        processed_text = ' '.join(processed_text.split())
+        
+        if self.debug and processed_text != text:
+            print(f"[GOOGLE TTS] Предобработка текста: '{text}' -> '{processed_text}'")
+            
+        return processed_text
+        
     def generate_speech(self, text, force_regenerate=False, voice=None):
         """
         Генерирует озвучку текста с помощью Google Cloud TTS и сохраняет в кэш
@@ -511,13 +549,16 @@ class GoogleTTSManager:
         if voice is None:
             voice = self.voice
             
+        # Предварительная обработка текста
+        processed_text = self._preprocess_text(text)
+            
         # Сначала получаем имя MP3 файла с учетом голоса
-        mp3_file = self.get_cached_filename(text, use_wav=False, voice=voice)
+        mp3_file = self.get_cached_filename(processed_text, use_wav=False, voice=voice)
         
         # Если нужен WAV, определяем его имя
         wav_file = None
         if self.use_wav:
-            wav_file = self.get_cached_filename(text, use_wav=True, voice=voice)
+            wav_file = self.get_cached_filename(processed_text, use_wav=True, voice=voice)
         
         with self.cache_lock:
             # Проверяем наличие файлов в кэше
@@ -532,7 +573,7 @@ class GoogleTTSManager:
                 self._save_stats()
                 
                 if self.debug:
-                    print(f"Использован кэш для: {text} (голос: {voice})")
+                    print(f"Использован кэш для: {processed_text} (голос: {voice})")
                     
                 return wav_file if self.use_wav else mp3_file
             
@@ -546,19 +587,19 @@ class GoogleTTSManager:
                     self._save_stats()
                     
                     if self.debug:
-                        print(f"Использован кэш (конвертация в WAV) для: {text} (голос: {voice})")
+                        print(f"Использован кэш (конвертация в WAV) для: {processed_text} (голос: {voice})")
                         
                     return wav_result
                 
             if self.debug:
-                print(f"Генерация озвучки для: {text} (голос: {voice})")
+                print(f"Генерация озвучки для: {processed_text} (голос: {voice})")
                 
             # Увеличиваем счетчики запросов
             self.stats["total_requests"] += 1
             self.stats["today_requests"] += 1
             
             # Увеличиваем счетчик символов
-            char_count = len(text)
+            char_count = len(processed_text)
             self.stats["total_chars"] += char_count
             
             # Замеряем время запроса
@@ -566,7 +607,7 @@ class GoogleTTSManager:
             
             try:
                 # Создаем запрос к Google Cloud TTS API
-                synthesis_input = texttospeech.SynthesisInput(text=text)
+                synthesis_input = texttospeech.SynthesisInput(text=processed_text)
                 
                 # Настраиваем голос
                 voice_params = texttospeech.VoiceSelectionParams(
@@ -602,7 +643,7 @@ class GoogleTTSManager:
                 
                 # Записываем в историю
                 self.stats["requests_history"].append({
-                    "text": text,
+                    "text": processed_text,
                     "time": elapsed_time,
                     "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "voice": voice,
@@ -674,6 +715,9 @@ class GoogleTTSManager:
             bool: True если воспроизведение запущено, иначе False
         """
         try:
+            # Предварительная обработка текста
+            processed_text = self._preprocess_text(text)
+            
             # Используем указанный голос или текущий по умолчанию
             if voice is None:
                 voice = self.voice
@@ -681,8 +725,8 @@ class GoogleTTSManager:
             # Если уже что-то воспроизводится, останавливаем
             self.stop_current_sound()
             
-            # Генерируем озвучку
-            audio_file = self.generate_speech(text, force_regenerate=False, voice=voice)
+            # Генерируем озвучку (генерация уже включает предобработку текста)
+            audio_file = self.generate_speech(processed_text, force_regenerate=False, voice=voice)
             if not audio_file:
                 return False
                 

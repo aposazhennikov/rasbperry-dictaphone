@@ -12,6 +12,7 @@ import sys
 import traceback
 from .google_tts_manager import GoogleTTSManager
 import sentry_sdk
+import re
 
 class TTSManager:
     """Управление озвучкой текста с помощью gTTS или Google Cloud TTS"""
@@ -446,6 +447,45 @@ class TTSManager:
             print("mpg123 не найден, конвертация невозможна")
             return None
             
+    def _preprocess_text(self, text):
+        """
+        Предварительная обработка текста перед отправкой в TTS
+        
+        Args:
+            text (str): Исходный текст
+            
+        Returns:
+            str: Обработанный текст
+        """
+        if not text:
+            return text
+            
+        import re
+            
+        # Удаляем расширения файлов (.mp3, .wav, .ogg, .txt и другие)
+        # Ищем шаблоны типа "filename.ext" и заменяем на "filename"
+        common_extensions = ['.mp3', '.wav', '.ogg', '.txt', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.jpg', '.jpeg', '.png', '.gif']
+        processed_text = text
+        
+        # Заменяем конкретные расширения файлов на пробел
+        for ext in common_extensions:
+            processed_text = processed_text.replace(ext, ' ')
+        
+        # Используем регулярное выражение для более общего случая
+        # Ищем паттерн "что-то.расширение" где расширение 2-4 символа
+        processed_text = re.sub(r'(\w+)(\.\w{2,4})\b', r'\1', processed_text)
+        
+        # Заменяем тире и нижнее подчеркивание на пробелы
+        processed_text = processed_text.replace('-', ' ').replace('_', ' ')
+        
+        # Удаляем лишние пробелы (несколько пробелов заменяем на один)
+        processed_text = ' '.join(processed_text.split())
+        
+        if self.debug and processed_text != text:
+            print(f"[TTS] Предобработка текста: '{text}' -> '{processed_text}'")
+            
+        return processed_text
+        
     def generate_speech(self, text, force_regenerate=False, voice=None):
         """
         Генерирует озвучку для указанного текста и возвращает путь к аудиофайлу
@@ -465,9 +505,12 @@ class TTSManager:
             if voice is None:
                 voice = self.voice
                 
+            # Предварительная обработка текста
+            processed_text = self._preprocess_text(text)
+            
             # Получаем путь к MP3 и WAV-файлам в кэше
-            mp3_file = self.get_cached_filename(text, use_wav=False, voice=voice)
-            wav_file = self.get_cached_filename(text, use_wav=True, voice=voice)
+            mp3_file = self.get_cached_filename(processed_text, use_wav=False, voice=voice)
+            wav_file = self.get_cached_filename(processed_text, use_wav=True, voice=voice)
             
             # Проверяем наличие файлов
             mp3_exists = os.path.exists(mp3_file)
@@ -480,7 +523,7 @@ class TTSManager:
                 self._save_stats()
                 
                 if self.debug:
-                    print(f"Использован кэш для: {text} (голос: {voice})")
+                    print(f"Использован кэш для: {processed_text} (голос: {voice})")
                     
                 return wav_file
             
@@ -491,7 +534,7 @@ class TTSManager:
                 self._save_stats()
                 
                 if self.debug:
-                    print(f"Использован кэш для: {text} (голос: {voice})")
+                    print(f"Использован кэш для: {processed_text} (голос: {voice})")
                     
                 return mp3_file
             
@@ -505,16 +548,16 @@ class TTSManager:
                     self._save_stats()
                     
                     if self.debug:
-                        print(f"Использован кэш (конвертация в WAV) для: {text} (голос: {voice})")
+                        print(f"Использован кэш (конвертация в WAV) для: {processed_text} (голос: {voice})")
                         
                     return wav_result
             
             # Если нужно сгенерировать файл и мы используем Google Cloud TTS
             if self.tts_engine == "google_cloud" and self.google_tts_manager:
-                return self.google_tts_manager.generate_speech(text, force_regenerate, voice)
+                return self.google_tts_manager.generate_speech(processed_text, force_regenerate, voice)
             
             if self.debug:
-                print(f"[TTS] Генерация озвучки с помощью gTTS для: {text} (голос: {voice})")
+                print(f"[TTS] Генерация озвучки с помощью gTTS для: {processed_text} (голос: {voice})")
                 
             # Увеличиваем счетчики запросов
             self.stats["total_requests"] += 1
@@ -527,7 +570,7 @@ class TTSManager:
                 # Создаем объект gTTS и сохраняем в MP3-файл
                 # Обратите внимание, что gTTS не поддерживает выбор конкретного голоса напрямую,
                 # но мы все равно храним разные файлы для разных голосов
-                tts = gTTS(text=text, lang=self.lang, tld=self.tld, slow=False)
+                tts = gTTS(text=processed_text, lang=self.lang, tld=self.tld, slow=False)
                 tts.save(mp3_file)
                 
                 # Если нужен WAV, конвертируем MP3 в WAV
@@ -542,7 +585,7 @@ class TTSManager:
                 
                 # Записываем в историю
                 self.stats["requests_history"].append({
-                    "text": text,
+                    "text": processed_text,
                     "time": elapsed_time,
                     "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "voice": voice
@@ -582,10 +625,13 @@ class TTSManager:
         try:
             if not text or not isinstance(text, str):
                 return False
+            
+            # Предварительная обработка текста
+            processed_text = self._preprocess_text(text)
                 
             # Если используем Google Cloud TTS, делегируем ему воспроизведение
             if self.tts_engine == "google_cloud" and self.google_tts_manager:
-                return self.google_tts_manager.play_speech(text, voice_id, blocking)
+                return self.google_tts_manager.play_speech(processed_text, voice_id, blocking)
             
             # Используем указанный голос или текущий по умолчанию
             if voice_id is None:
@@ -594,8 +640,8 @@ class TTSManager:
             # Если уже что-то воспроизводится, останавливаем
             self.stop_current_sound()
             
-            # Генерируем озвучку
-            audio_file = self.generate_speech(text, force_regenerate=False, voice=voice_id)
+            # Генерируем озвучку (генерация уже включает предобработку текста)
+            audio_file = self.generate_speech(processed_text, force_regenerate=False, voice=voice_id)
             if not audio_file:
                 return False
             
@@ -760,7 +806,7 @@ class TTSManager:
 
     def speak_text(self, text, voice_id=None):
         """
-        Синтезирует и воспроизводит речь для указанного текста
+        Озвучивает текст (псевдоним для play_speech)
         
         Args:
             text (str): Текст для озвучивания
@@ -770,16 +816,19 @@ class TTSManager:
             bool: True, если озвучивание успешно запущено
         """
         try:
-            return self.play_speech(text, voice_id)
+            # Предварительная обработка текста выполняется внутри play_speech
+            if self.debug:
+                print(f"Озвучивание текста: {text}")
+            return self.play_speech(text, voice_id=voice_id, blocking=False)
         except Exception as e:
             error_msg = f"Ошибка при озвучивании текста: {e}"
             print(error_msg)
             sentry_sdk.capture_exception(e)
             return False
-
+    
     def play_speech_blocking(self, text, voice_id=None):
         """
-        Озвучивает текст и ожидает завершения озвучивания
+        Озвучивает текст с помощью выбранного движка в блокирующем режиме
         
         Args:
             text (str): Текст для озвучивания
@@ -789,7 +838,10 @@ class TTSManager:
             bool: True, если озвучивание успешно выполнено
         """
         try:
-            return self.play_speech(text, voice_id, blocking=True)
+            # Предварительная обработка текста выполняется внутри play_speech
+            if self.debug:
+                print(f"Блокирующее озвучивание текста: {text}")
+            return self.play_speech(text, voice_id=voice_id, blocking=True)
         except Exception as e:
             error_msg = f"Ошибка при блокирующем воспроизведении речи: {e}"
             print(error_msg)
