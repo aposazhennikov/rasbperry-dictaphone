@@ -473,7 +473,22 @@ class TTSManager:
         
         # Используем регулярное выражение для более общего случая
         # Ищем паттерн "что-то.расширение" где расширение 2-4 символа
+        # Исключаем даты в формате DD.MM.YYYY из обработки
+        # Сначала находим и временно заменяем даты
+        date_pattern = r'(\d{2})\.(\d{2})\.(\d{4})'
+        # Сохраняем даты с временной меткой
+        dates_found = re.findall(date_pattern, processed_text)
+        for i, date_parts in enumerate(dates_found):
+            date_str = f"{date_parts[0]}.{date_parts[1]}.{date_parts[2]}"
+            processed_text = processed_text.replace(date_str, f"__DATE_{i}__")
+        
+        # Теперь обрабатываем расширения файлов
         processed_text = re.sub(r'(\w+)(\.\w{2,4})\b', r'\1', processed_text)
+        
+        # Восстанавливаем даты
+        for i, date_parts in enumerate(dates_found):
+            date_str = f"{date_parts[0]}.{date_parts[1]}.{date_parts[2]}"
+            processed_text = processed_text.replace(f"__DATE_{i}__", date_str)
         
         # Заменяем тире и нижнее подчеркивание на пробелы
         processed_text = processed_text.replace('-', ' ').replace('_', ' ')
@@ -610,6 +625,224 @@ class TTSManager:
             sentry_sdk.capture_exception(e)
             return None
     
+    def _is_valid_audio_file(self, file_path):
+        """
+        Проверяет, является ли аудиофайл валидным и полным
+        
+        Args:
+            file_path (str): Путь к аудиофайлу
+            
+        Returns:
+            bool: True если файл валидный, иначе False
+        """
+        if not os.path.exists(file_path):
+            return False
+            
+        # Проверка размера файла (должен быть не пустым)
+        if os.path.getsize(file_path) < 100:
+            if self.debug:
+                print(f"[TTS] Аудиофайл слишком маленький: {file_path}")
+            return False
+            
+        # Проверка формата MP3
+        if file_path.endswith('.mp3'):
+            try:
+                result = subprocess.run(
+                    ["mp3info", "-p", "%S", file_path], 
+                    stdout=subprocess.PIPE, 
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=False
+                )
+                
+                # Если вывод пустой или ошибка, файл может быть поврежден
+                if not result.stdout.strip() or int(result.stdout.strip()) < 1:
+                    if self.debug:
+                        print(f"[TTS] MP3 файл может быть поврежден: {file_path}")
+                    return False
+            except:
+                # Если mp3info не установлен, пропускаем эту проверку
+                pass
+                
+        # Проверка формата WAV
+        if file_path.endswith('.wav'):
+            try:
+                result = subprocess.run(
+                    ["soxi", "-d", file_path], 
+                    stdout=subprocess.PIPE, 
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=False
+                )
+                
+                # Если вывод пустой или ошибка, файл может быть поврежден
+                if "0:00" in result.stdout or not result.stdout.strip():
+                    if self.debug:
+                        print(f"[TTS] WAV файл может быть поврежден: {file_path}")
+                    return False
+            except:
+                # Если soxi не установлен, пропускаем эту проверку
+                pass
+                
+        return True
+        
+    def _ensure_audio_playable(self, file_path):
+        """
+        Проверяет и подготавливает аудиофайл к воспроизведению, 
+        исправляя распространенные проблемы с буферизацией
+        
+        Args:
+            file_path (str): Путь к аудиофайлу
+            
+        Returns:
+            str: Путь к подготовленному файлу или None при ошибке
+        """
+        try:
+            # Если файл не существует, выходим
+            if not os.path.exists(file_path):
+                return None
+                
+            # Для простоты проверяем только размер файла
+            # Это надежнее чем вызов внешних программ
+            if os.path.getsize(file_path) < 100:
+                if self.debug:
+                    print(f"[TTS] Аудиофайл слишком маленький: {file_path}")
+                return None
+                
+            # Создаем буферизованную копию для WAV-файлов
+            if file_path.endswith('.wav') and self.use_wav:
+                try:
+                    # Сначала определяем оригинальную частоту дискретизации
+                    sample_rate = None
+                    channels = None
+                    bits = None
+                    
+                    try:
+                        # Получаем частоту дискретизации
+                        rate_result = subprocess.run(
+                            ["soxi", "-r", file_path],
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                            check=False
+                        )
+                        if rate_result.stdout.strip().isdigit():
+                            sample_rate = int(rate_result.stdout.strip())
+                            if self.debug:
+                                print(f"[TTS] Определена частота дискретизации: {sample_rate} Hz")
+                                
+                        # Получаем количество каналов
+                        channels_result = subprocess.run(
+                            ["soxi", "-c", file_path],
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                            check=False
+                        )
+                        if channels_result.stdout.strip().isdigit():
+                            channels = int(channels_result.stdout.strip())
+                            
+                        # Получаем битность
+                        bits_result = subprocess.run(
+                            ["soxi", "-b", file_path],
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                            check=False
+                        )
+                        if bits_result.stdout.strip().isdigit():
+                            bits = int(bits_result.stdout.strip())
+                            
+                    except Exception as e:
+                        if self.debug:
+                            print(f"[TTS] Ошибка определения параметров аудио: {e}")
+                        
+                    # Путь к буферизованному файлу
+                    buffered_file = file_path.replace('.wav', '_buffered.wav')
+                    
+                    # Если буферизованный файл уже существует, возвращаем его
+                    if os.path.exists(buffered_file) and os.path.getsize(buffered_file) > os.path.getsize(file_path):
+                        return buffered_file
+                        
+                    # Создаем промежуточный файл для фиксации скорости
+                    temp_file = file_path.replace('.wav', '_temp.wav')
+                    
+                    # Применяем фильтр для стабилизации скорости воспроизведения
+                    speed_cmd = [
+                        "sox",
+                        file_path,
+                        temp_file,
+                        "rate", "-v" # Высокое качество конвертации
+                    ]
+                    
+                    # Добавляем частоту дискретизации, если определили
+                    if sample_rate:
+                        speed_cmd.append(str(sample_rate))
+                    else:
+                        speed_cmd.append("24000") # Стандартная частота по умолчанию
+                    
+                    # Выполняем команду стабилизации скорости
+                    try:
+                        subprocess.run(
+                            speed_cmd,
+                            stdout=subprocess.PIPE, 
+                            stderr=subprocess.PIPE,
+                            check=False
+                        )
+                    except Exception as e:
+                        if self.debug:
+                            print(f"[TTS] Ошибка при стабилизации скорости: {e}")
+                        # Продолжаем с исходным файлом, если ошибка
+                        temp_file = file_path
+                    
+                    # Создаем команду для sox с сохранением параметров аудио
+                    cmd = [
+                        "sox", 
+                        temp_file
+                    ]
+                    
+                    # Добавляем параметры аудио, если определили
+                    if sample_rate:
+                        cmd.extend(["-r", str(sample_rate)])
+                    
+                    # Добавляем выходной файл и параметры
+                    cmd.extend([
+                        buffered_file,
+                        "pad", "0.3", "0.2",  # 0.3с в начале, 0.2с в конце
+                        "norm"  # Нормализация уровня громкости
+                    ])
+                    
+                    if self.debug:
+                        print(f"[TTS] Буферизация аудио: {' '.join(cmd)}")
+                        
+                    subprocess.run(
+                        cmd,
+                        stdout=subprocess.PIPE, 
+                        stderr=subprocess.PIPE,
+                        check=False
+                    )
+                    
+                    # Удаляем временный файл, если он был создан
+                    if temp_file != file_path and os.path.exists(temp_file):
+                        try:
+                            os.remove(temp_file)
+                        except:
+                            pass
+                    
+                    if os.path.exists(buffered_file) and os.path.getsize(buffered_file) > 0:
+                        return buffered_file
+                except Exception as buffer_error:
+                    if self.debug:
+                        print(f"[TTS] Ошибка при буферизации файла: {buffer_error}")
+                    # При ошибке продолжаем с исходным файлом
+            
+            return file_path
+                
+        except Exception as e:
+            if self.debug:
+                print(f"[TTS] Ошибка при подготовке аудиофайла: {e}")
+            return file_path  # Возвращаем исходный файл при ошибке
+            
     def play_speech(self, text, voice_id=None, blocking=False):
         """
         Озвучивает текст с помощью выбранного движка
@@ -643,7 +876,24 @@ class TTSManager:
             # Генерируем озвучку (генерация уже включает предобработку текста)
             audio_file = self.generate_speech(processed_text, force_regenerate=False, voice=voice_id)
             if not audio_file:
+                if self.debug:
+                    print(f"[TTS ERROR] Не удалось сгенерировать аудиофайл для текста: {processed_text}")
                 return False
+            
+            # Проверяем и подготавливаем файл перед воспроизведением
+            prepared_audio = self._ensure_audio_playable(audio_file)
+            if not prepared_audio:
+                # Если файл некорректный, пробуем пересоздать его
+                if self.debug:
+                    print(f"[TTS] Аудиофайл некорректный, пересоздаем: {audio_file}")
+                audio_file = self.generate_speech(processed_text, force_regenerate=True, voice=voice_id)
+                
+                # Проверяем пересозданный файл
+                prepared_audio = self._ensure_audio_playable(audio_file)
+                if not prepared_audio:
+                    if self.debug:
+                        print(f"[TTS ERROR] Не удалось создать корректный аудиофайл после повторной попытки")
+                    return False
             
             try:
                 # Получаем текущий уровень громкости из настроек
@@ -659,50 +909,84 @@ class TTSManager:
                 # Используем экспоненциальную шкалу для более естественного изменения громкости
                 volume_exp = (volume / 100.0) ** 2
                 
-                # Запускаем процесс воспроизведения звука с указанной громкостью
+                # Использование более надежного метода воспроизведения
                 if self.use_wav:
-                    # Для WAV используем paplay или aplay с контролем громкости
-                    try:
+                    if os.path.exists("/usr/bin/paplay"):
                         # paplay использует линейную шкалу от 0 до 65536
                         volume_paplay = int(volume_exp * 65536)
+                        cmd = ["paplay", "--volume", str(volume_paplay), prepared_audio]
+                        if self.debug:
+                            print(f"[TTS] Воспроизведение через paplay: {' '.join(cmd)}")
+                        
+                        # Добавляем небольшую паузу перед воспроизведением для стабильности
+                        time.sleep(0.2)
+                        
                         self.current_sound_process = subprocess.Popen(
-                            ["paplay", "--volume", str(volume_paplay), audio_file],
+                            cmd,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                         )
-                    except:
-                        # Если paplay не доступен, пробуем aplay с softvol
-                        # aplay использует линейную шкалу от 0 до 100
-                        volume_aplay = int(volume_exp * 100)
+                    elif os.path.exists("/usr/bin/aplay"):
+                        cmd = ["aplay", prepared_audio]
+                        if self.debug:
+                            print(f"[TTS] Воспроизведение через aplay: {' '.join(cmd)}")
+                            
+                        # Добавляем небольшую паузу перед воспроизведением для стабильности
+                        time.sleep(0.2)
+                        
                         self.current_sound_process = subprocess.Popen(
-                            ["aplay", "-D", f"softvol,softvol=volume={volume_aplay}", audio_file],
+                            cmd,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                         )
+                    else:
+                        print("[TTS ERROR] Не найдены paplay или aplay для воспроизведения WAV")
+                        return False
                 else:
-                    # Для MP3 используем mpg123 с контролем громкости
-                    # mpg123 использует линейную шкалу от 0 до 32768
-                    volume_mpg123 = int(volume_exp * 32768)
-                    self.current_sound_process = subprocess.Popen(
-                        ["mpg123", "-f", str(volume_mpg123), audio_file],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                    )
-                    
-                # Запускаем поток ожидания завершения воспроизведения
+                    if os.path.exists("/usr/bin/mpg123"):
+                        # mpg123 использует линейную шкалу от 0 до 32768
+                        volume_mpg123 = int(volume_exp * 32768)
+                        # Добавляем опции для предотвращения артефактов
+                        cmd = ["mpg123", "-q", "--no-control", "-f", str(volume_mpg123), prepared_audio]
+                        if self.debug:
+                            print(f"[TTS] Воспроизведение через mpg123: {' '.join(cmd)}")
+                            
+                        # Добавляем небольшую паузу перед воспроизведением для стабильности
+                        time.sleep(0.2)
+                        
+                        self.current_sound_process = subprocess.Popen(
+                            cmd,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                        )
+                    else:
+                        print("[TTS ERROR] Не найден mpg123 для воспроизведения MP3")
+                        return False
+                
                 self.is_playing = True
-                wait_thread = threading.Thread(target=self.wait_completion, daemon=True)
-                wait_thread.start()
                 
                 if blocking:
-                    wait_thread.join()
+                    # Если нужно блокировать выполнение до окончания воспроизведения
+                    if self.current_sound_process:
+                        # Подождем завершения воспроизведения
+                        ret_code = self.current_sound_process.wait()
+                        
+                        # Проверяем код возврата, чтобы понять успешно ли завершилось воспроизведение
+                        if self.debug and ret_code != 0:
+                            print(f"[TTS WARNING] Воспроизведение завершилось с кодом {ret_code}")
+                        
+                        # Добавляем небольшую паузу после воспроизведения для стабильности
+                        time.sleep(0.3)
+                        
+                        self.is_playing = False
+                        self.current_sound_process = None
                 
                 return True
-            except Exception as e:
-                error_msg = f"Ошибка при воспроизведении звука: {e}"
+            except Exception as play_error:
+                error_msg = f"Ошибка при воспроизведении звука: {play_error}"
                 print(f"[TTS ERROR] {error_msg}")
-                sentry_sdk.capture_exception(e)
+                sentry_sdk.capture_exception(play_error)
                 return False
         except Exception as e:
-            error_msg = f"Ошибка при воспроизведении речи: {e}"
-            print(error_msg)
+            error_msg = f"Критическая ошибка при озвучивании текста: {e}"
+            print(f"[TTS CRITICAL ERROR] {error_msg}")
             sentry_sdk.capture_exception(e)
             return False
     
@@ -755,7 +1039,20 @@ class TTSManager:
         
         for voice in voices:
             for text in unique_items:
-                self.generate_speech(text, force_regenerate=False, voice=voice)
+                # Генерируем озвучку
+                audio_file = self.generate_speech(text, force_regenerate=False, voice=voice)
+                
+                # Если файл был сгенерирован и мы используем WAV-формат, создаем буферизованную версию
+                if audio_file and audio_file.endswith('.wav') and self.use_wav:
+                    try:
+                        # Создаем буферизованную версию
+                        buffered_file = self._ensure_audio_playable(audio_file)
+                        if self.debug and buffered_file and buffered_file != audio_file:
+                            print(f"Создан буферизованный файл: {os.path.basename(buffered_file)}")
+                    except Exception as buffer_error:
+                        if self.debug:
+                            print(f"[TTS] Ошибка при создании буферизованного файла: {buffer_error}")
+                
                 processed += 1
                 if self.debug:
                     print(f"Предварительная генерация: {processed}/{total_items} - {text} (голос: {voice})")
@@ -799,7 +1096,20 @@ class TTSManager:
             return
         
         for text, voice in missing_items:
-            self.generate_speech(text, force_regenerate=False, voice=voice)
+            # Генерируем озвучку
+            audio_file = self.generate_speech(text, force_regenerate=False, voice=voice)
+            
+            # Если файл был сгенерирован и мы используем WAV-формат, создаем буферизованную версию
+            if audio_file and audio_file.endswith('.wav') and self.use_wav:
+                try:
+                    # Создаем буферизованную версию
+                    buffered_file = self._ensure_audio_playable(audio_file)
+                    if self.debug and buffered_file and buffered_file != audio_file:
+                        print(f"Создан буферизованный файл: {os.path.basename(buffered_file)}")
+                except Exception as buffer_error:
+                    if self.debug:
+                        print(f"[TTS] Ошибка при создании буферизованного файла: {buffer_error}")
+            
             processed += 1
             if self.debug:
                 print(f"Генерация: {processed}/{total_missing} - {text} (голос: {voice})")

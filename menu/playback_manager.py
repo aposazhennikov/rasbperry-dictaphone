@@ -390,8 +390,11 @@ class PlaybackManager:
                     # Сначала озвучиваем статичное сообщение
                     self.tts_manager.play_speech_blocking("Переключаю вперед на запись")
                     time.sleep(0.1)  # Небольшая пауза между сообщениями
-                    # Затем озвучиваем название записи отдельно
-                    self.tts_manager.play_speech_blocking(file_info['description'])
+                    # Затем озвучиваем название записи отдельно без префикса "Композиция"
+                    # Используем оригинальное название из file_info
+                    file_name = file_info['name']
+                    
+                    self.tts_manager.play_speech_blocking(file_name)
                     # Дополнительная пауза после сообщения
                     time.sleep(0.5)
             except Exception as e:
@@ -433,8 +436,11 @@ class PlaybackManager:
                     # Сначала озвучиваем статичное сообщение
                     self.tts_manager.play_speech_blocking("Переключаю назад на запись")
                     time.sleep(0.1)  # Небольшая пауза между сообщениями
-                    # Затем озвучиваем название записи отдельно
-                    self.tts_manager.play_speech_blocking(file_info['description'])
+                    # Затем озвучиваем название записи отдельно без префикса "Композиция"
+                    # Используем оригинальное название из file_info
+                    file_name = file_info['name']
+                    
+                    self.tts_manager.play_speech_blocking(file_name)
                     # Дополнительная пауза после сообщения
                     time.sleep(0.5)
             except Exception as e:
