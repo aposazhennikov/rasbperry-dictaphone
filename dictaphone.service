@@ -1,0 +1,16 @@
+[Unit]
+Description=Raspberry Pi Dictaphone Service
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=1
+User=aleks
+Environment=PYTHONUNBUFFERED=1
+WorkingDirectory=/home/aleks/main-scripts
+ExecStart=/bin/bash -c 'source /home/aleks/main-scripts/venv/bin/activate && python3 /home/aleks/main-scripts/run_menu.py --tts-engine google_cloud --google-cloud-credentials /home/aleks/main-scripts/credentials-google-api.json --debug'
+
+[Install]
+WantedBy=multi-user.target 
