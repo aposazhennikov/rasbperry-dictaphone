@@ -4,6 +4,7 @@ import sentry_sdk
 from .menu_manager import MenuManager
 from .menu_item import MenuItem, SubMenu, Menu
 from .tts_manager import TTSManager
+from .espeak_tts_manager import EspeakTTSManager
 from .settings_manager import SettingsManager
 from .display_manager import DisplayManager
 from .input_handler import InputHandler
@@ -21,3 +22,5 @@ from .event_bus import EventBus, EVENT_USB_MIC_DISCONNECTED, EVENT_RECORDING_SAV
 
 from .base_menu import BaseMenu
 from .external_storage_menu import ExternalStorageMenu
+
+__all__ = ['TTSManager', 'EspeakTTSManager']

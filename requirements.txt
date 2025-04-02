@@ -12,3 +12,4 @@ python-vlc>=3.0.20000
 pyudev>=0.24.1
 psutil>=5.9.0
 python-magic==0.4.27
+py-espeak-ng>=0.1.7

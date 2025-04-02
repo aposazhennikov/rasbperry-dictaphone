@@ -444,6 +444,7 @@ class MenuManager:
         speech_texts.add("главное меню")
         speech_texts.add("предыдущее меню")
         speech_texts.add("Голос успешно изменен")
+        speech_texts.add("Диктофон готов к работе")  # Добавляем сообщение о готовности
         
         # Добавляем сообщения для диктофона
         speech_texts.add("Запись началась")

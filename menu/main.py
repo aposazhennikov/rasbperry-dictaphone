@@ -151,6 +151,10 @@ def main():
             sentry_sdk.capture_exception(mm_error)
             raise
         
+        # Озвучиваем готовность системы
+        if not args.no_tts and menu_manager.tts_manager:
+            menu_manager.tts_manager.play_speech_blocking("Диктофон готов к работе", voice_id="ru-RU-Standard-D")
+            
         # Создаем структуру меню
         print(f"[MAIN] Создание структуры меню")
         menu_manager.create_menu_structure()
@@ -160,10 +164,6 @@ def main():
         
         # Создаем обработчик ввода
         input_handler = InputHandler(menu_manager)
-        
-        # Озвучиваем готовность системы
-        if not args.no_tts and menu_manager.tts_manager:
-            menu_manager.tts_manager.play_speech_blocking("Диктофон готов к работе", voice_id="ru-RU-Standard-D")
         
         # Запускаем цикл обработки ввода
         input_handler.start_input_loop()

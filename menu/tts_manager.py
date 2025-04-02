@@ -13,6 +13,8 @@ import traceback
 from .google_tts_manager import GoogleTTSManager
 import sentry_sdk
 import re
+from .espeak_tts_manager import EspeakTTSManager
+import urllib.request
 
 class TTSManager:
     """Управление озвучкой текста с помощью gTTS или Google Cloud TTS"""
@@ -99,6 +101,9 @@ class TTSManager:
         
         # Обновляем счетчик дневных запросов
         self._update_day_counter()
+        
+        # Инициализируем offline TTS
+        self.offline_tts = EspeakTTSManager(debug=debug, settings_manager=settings_manager)
         
     def _init_google_cloud_tts(self):
         """Инициализирует Google Cloud TTS менеджер"""
@@ -391,11 +396,18 @@ class TTSManager:
             if voice is None:
                 voice = self.voice
                 
-            # Хэшируем текст для создания имени файла
-            text_hash = hashlib.md5(text.encode('utf-8')).hexdigest()
+            # Получаем короткий идентификатор голоса (D для ru-RU-Standard-D)
+            voice_short = voice.split('-')[-1]
             
-            # Добавляем идентификатор голоса к имени файла
-            filename = f"{voice}_{text_hash}"
+            # Форматируем имя файла в стиле gc_[текст]_[голос]
+            # Заменяем пробелы на _ и удаляем специальные символы
+            safe_text = text.lower().replace(' ', '_').replace('"', '').replace("'", '')
+            
+            # Создаем хэш от комбинации текста и голоса
+            text_hash = hashlib.md5(f"{text}_{voice}".encode('utf-8')).hexdigest()[:8]
+            
+            # Формируем имя файла с хэшем
+            filename = f"gc_{safe_text}_{voice_short}_{text_hash}"
             
             # Определяем расширение файла
             ext = "wav" if use_wav else "mp3"
@@ -403,13 +415,22 @@ class TTSManager:
             # Формируем полный путь к файлу
             file_path = os.path.join(self.cache_dir, f"{filename}.{ext}")
             
+            if self.debug:
+                print(f"[TTS DEBUG] Формирование имени файла:")
+                print(f"[TTS DEBUG] Исходный текст: '{text}'")
+                print(f"[TTS DEBUG] Безопасный текст: '{safe_text}'")
+                print(f"[TTS DEBUG] Хэш текста+голоса: {text_hash}")
+                print(f"[TTS DEBUG] Используемый голос: {voice} -> {voice_short}")
+                print(f"[TTS DEBUG] Полный путь: {file_path}")
+                print(f"[TTS DEBUG] Файл существует: {os.path.exists(file_path)}")
+                if os.path.exists(file_path):
+                    print(f"[TTS DEBUG] Размер файла: {os.path.getsize(file_path)} байт")
+            
             return file_path
         except Exception as e:
-            error_msg = f"Ошибка при получении пути к кэшированному файлу: {e}"
-            print(f"[TTS CACHE ERROR] {error_msg}")
-            sentry_sdk.capture_exception(e)
-            # Возвращаем стандартный путь в случае ошибки
-            return os.path.join(self.cache_dir, f"error_{hashlib.md5(text.encode('utf-8')).hexdigest()}.mp3")
+            if self.debug:
+                print(f"[TTS ERROR] Ошибка при получении пути к кэшированному файлу: {e}")
+            return None
     
     def mp3_to_wav(self, mp3_file):
         """
@@ -848,7 +869,7 @@ class TTSManager:
         Озвучивает текст с помощью выбранного движка
         
         Args:
-            text (str): Текст для озвучивания
+            text (str): Текст для озвучивания или путь к файлу
             voice_id (str): Идентификатор голоса (можно переопределить)
             blocking (bool): Ожидать окончания воспроизведения
             
@@ -859,41 +880,37 @@ class TTSManager:
             if not text or not isinstance(text, str):
                 return False
             
-            # Предварительная обработка текста
-            processed_text = self._preprocess_text(text)
+            # Проверяем, является ли text путем к файлу
+            if os.path.exists(text) and (text.endswith('.wav') or text.endswith('.mp3')):
+                audio_file = text
+            else:
+                # Предварительная обработка текста
+                processed_text = self._preprocess_text(text)
+                    
+                # Если используем Google Cloud TTS, делегируем ему воспроизведение
+                if self.tts_engine == "google_cloud" and self.google_tts_manager:
+                    return self.google_tts_manager.play_speech(processed_text, voice_id, blocking)
                 
-            # Если используем Google Cloud TTS, делегируем ему воспроизведение
-            if self.tts_engine == "google_cloud" and self.google_tts_manager:
-                return self.google_tts_manager.play_speech(processed_text, voice_id, blocking)
-            
-            # Используем указанный голос или текущий по умолчанию
-            if voice_id is None:
-                voice_id = self.voice
-            
-            # Если уже что-то воспроизводится, останавливаем
-            self.stop_current_sound()
-            
-            # Генерируем озвучку (генерация уже включает предобработку текста)
-            audio_file = self.generate_speech(processed_text, force_regenerate=False, voice=voice_id)
-            if not audio_file:
-                if self.debug:
-                    print(f"[TTS ERROR] Не удалось сгенерировать аудиофайл для текста: {processed_text}")
-                return False
+                # Используем указанный голос или текущий по умолчанию
+                if voice_id is None:
+                    voice_id = self.voice
+                
+                # Если уже что-то воспроизводится, останавливаем
+                self.stop_current_sound()
+                
+                # Генерируем озвучку (генерация уже включает предобработку текста)
+                audio_file = self.generate_speech(processed_text, force_regenerate=False, voice=voice_id)
+                if not audio_file:
+                    if self.debug:
+                        print(f"[TTS ERROR] Не удалось сгенерировать аудиофайл для текста: {processed_text}")
+                    return False
             
             # Проверяем и подготавливаем файл перед воспроизведением
             prepared_audio = self._ensure_audio_playable(audio_file)
             if not prepared_audio:
-                # Если файл некорректный, пробуем пересоздать его
                 if self.debug:
-                    print(f"[TTS] Аудиофайл некорректный, пересоздаем: {audio_file}")
-                audio_file = self.generate_speech(processed_text, force_regenerate=True, voice=voice_id)
-                
-                # Проверяем пересозданный файл
-                prepared_audio = self._ensure_audio_playable(audio_file)
-                if not prepared_audio:
-                    if self.debug:
-                        print(f"[TTS ERROR] Не удалось создать корректный аудиофайл после повторной попытки")
-                    return False
+                    print(f"[TTS ERROR] Не удалось подготовить аудиофайл для воспроизведения")
+                return False
             
             try:
                 # Получаем текущий уровень громкости из настроек
@@ -906,75 +923,40 @@ class TTSManager:
                         sentry_sdk.capture_exception(vol_error)
                 
                 # Нормализуем громкость в диапазон 0-1 с экспоненциальной шкалой
-                # Используем экспоненциальную шкалу для более естественного изменения громкости
                 volume_exp = (volume / 100.0) ** 2
                 
                 # Использование более надежного метода воспроизведения
-                if self.use_wav:
+                if prepared_audio.endswith('.wav'):
                     if os.path.exists("/usr/bin/paplay"):
-                        # paplay использует линейную шкалу от 0 до 65536
                         volume_paplay = int(volume_exp * 65536)
                         cmd = ["paplay", "--volume", str(volume_paplay), prepared_audio]
-                        if self.debug:
-                            print(f"[TTS] Воспроизведение через paplay: {' '.join(cmd)}")
-                        
-                        # Добавляем небольшую паузу перед воспроизведением для стабильности
-                        time.sleep(0.2)
-                        
-                        self.current_sound_process = subprocess.Popen(
-                            cmd,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                        )
-                    elif os.path.exists("/usr/bin/aplay"):
+                    else:
                         cmd = ["aplay", prepared_audio]
-                        if self.debug:
-                            print(f"[TTS] Воспроизведение через aplay: {' '.join(cmd)}")
-                            
-                        # Добавляем небольшую паузу перед воспроизведением для стабильности
-                        time.sleep(0.2)
-                        
-                        self.current_sound_process = subprocess.Popen(
-                            cmd,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                        )
-                    else:
-                        print("[TTS ERROR] Не найдены paplay или aplay для воспроизведения WAV")
-                        return False
                 else:
-                    if os.path.exists("/usr/bin/mpg123"):
-                        # mpg123 использует линейную шкалу от 0 до 32768
-                        volume_mpg123 = int(volume_exp * 32768)
-                        # Добавляем опции для предотвращения артефактов
-                        cmd = ["mpg123", "-q", "--no-control", "-f", str(volume_mpg123), prepared_audio]
-                        if self.debug:
-                            print(f"[TTS] Воспроизведение через mpg123: {' '.join(cmd)}")
-                            
-                        # Добавляем небольшую паузу перед воспроизведением для стабильности
-                        time.sleep(0.2)
-                        
-                        self.current_sound_process = subprocess.Popen(
-                            cmd,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                        )
-                    else:
-                        print("[TTS ERROR] Не найден mpg123 для воспроизведения MP3")
-                        return False
+                    volume_mpg123 = int(volume_exp * 32768)
+                    cmd = ["mpg123", "-q", "--no-control", "-f", str(volume_mpg123), prepared_audio]
+                
+                if self.debug:
+                    print(f"[TTS] Воспроизведение: {' '.join(cmd)}")
+                
+                # Добавляем небольшую паузу перед воспроизведением для стабильности
+                time.sleep(0.2)
+                
+                self.current_sound_process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.DEVNULL, 
+                    stderr=subprocess.DEVNULL
+                )
                 
                 self.is_playing = True
                 
                 if blocking:
                     # Если нужно блокировать выполнение до окончания воспроизведения
                     if self.current_sound_process:
-                        # Подождем завершения воспроизведения
                         ret_code = self.current_sound_process.wait()
-                        
-                        # Проверяем код возврата, чтобы понять успешно ли завершилось воспроизведение
                         if self.debug and ret_code != 0:
                             print(f"[TTS WARNING] Воспроизведение завершилось с кодом {ret_code}")
-                        
-                        # Добавляем небольшую паузу после воспроизведения для стабильности
                         time.sleep(0.3)
-                        
                         self.is_playing = False
                         self.current_sound_process = None
                 
@@ -1138,25 +1120,221 @@ class TTSManager:
     
     def play_speech_blocking(self, text, voice_id=None):
         """
-        Озвучивает текст с помощью выбранного движка в блокирующем режиме
+        Воспроизводит озвучку текста в блокирующем режиме
         
         Args:
             text (str): Текст для озвучивания
-            voice_id (str): Идентификатор голоса (можно переопределить)
+            voice_id (str): Идентификатор голоса
             
         Returns:
-            bool: True, если озвучивание успешно выполнено
+            bool: True если воспроизведение успешно, иначе False
         """
         try:
-            # Предварительная обработка текста выполняется внутри play_speech
-            if self.debug:
-                print(f"Блокирующее озвучивание текста: {text}")
-            return self.play_speech(text, voice_id=voice_id, blocking=True)
+            if not text:
+                return False
+                
+            # Используем указанный голос или текущий по умолчанию
+            if voice_id is None:
+                voice_id = self.voice
+                
+            # Предварительная обработка текста
+            processed_text = self._preprocess_text(text)
+            
+            # Проверяем наличие файла в кэше
+            cached_file = self._get_cache_file(processed_text, voice_id)
+            if cached_file and os.path.exists(cached_file):
+                if self.debug:
+                    print(f"[TTS] Использую кэшированный файл для: {processed_text}")
+                return self._play_cached_file(cached_file)
+                
+            # Если нет кэшированных файлов и нет интернета, используем offline TTS
+            if not self._check_internet_connection():
+                if self.debug:
+                    print("[TTS] Нет интернета и нет кэшированных файлов, использую offline TTS")
+                return self.offline_tts.play_speech_blocking(processed_text)
+                
+            # Если есть интернет, генерируем и воспроизводим
+            audio_file = self.generate_speech(processed_text, force_regenerate=False, voice=voice_id)
+            if not audio_file:
+                if self.debug:
+                    print(f"[TTS ERROR] Не удалось сгенерировать аудиофайл для текста: {processed_text}")
+                return self.offline_tts.play_speech_blocking(processed_text)
+                
+            return self._play_cached_file(audio_file)
+            
         except Exception as e:
-            error_msg = f"Ошибка при блокирующем воспроизведении речи: {e}"
-            print(error_msg)
-            sentry_sdk.capture_exception(e)
+            if self.debug:
+                print(f"[TTS ERROR] Ошибка при воспроизведении: {e}")
+            # В случае любой ошибки используем offline TTS
+            return self.offline_tts.play_speech_blocking(processed_text)
+            
+    def _get_cache_file(self, text, voice_id):
+        """
+        Получает путь к кэшированному файлу
+        
+        Args:
+            text (str): Текст
+            voice_id (str): Идентификатор голоса
+            
+        Returns:
+            str: Путь к файлу или None
+        """
+        try:
+            if self.debug:
+                print(f"\n[TTS DEBUG] ====== Поиск файла в кэше ======")
+                print(f"[TTS DEBUG] Текст для поиска: '{text}'")
+                print(f"[TTS DEBUG] Голос: {voice_id}")
+                print(f"[TTS DEBUG] Директория кэша: {self.cache_dir}")
+                print(f"[TTS DEBUG] Использовать WAV: {self.use_wav}")
+            
+            # Получаем имя файла с учетом голоса
+            if self.use_wav:
+                cached_file = self.get_cached_filename(text, use_wav=True, voice=voice_id)
+            else:
+                cached_file = self.get_cached_filename(text, use_wav=False, voice=voice_id)
+                
+            if self.debug:
+                print(f"[TTS DEBUG] Сформированный путь к файлу: {cached_file}")
+                if os.path.exists(cached_file):
+                    print(f"[TTS DEBUG] Файл найден")
+                    file_size = os.path.getsize(cached_file)
+                    print(f"[TTS DEBUG] Размер файла: {file_size} байт")
+                    if file_size < 100:
+                        print(f"[TTS DEBUG] Файл слишком маленький, будет проигнорирован")
+                else:
+                    print(f"[TTS DEBUG] Файл не найден")
+                    # Показываем содержимое директории
+                    print(f"[TTS DEBUG] Содержимое директории {self.cache_dir}:")
+                    try:
+                        files = os.listdir(self.cache_dir)
+                        for f in files[:5]:  # Показываем первые 5 файлов
+                            print(f"[TTS DEBUG] - {f}")
+                        if len(files) > 5:
+                            print(f"[TTS DEBUG] ... и еще {len(files)-5} файлов")
+                    except Exception as e:
+                        print(f"[TTS DEBUG] Ошибка при чтении директории: {e}")
+                
+            # Проверяем существование и размер файла
+            if os.path.exists(cached_file):
+                file_size = os.path.getsize(cached_file)
+                if file_size < 100:  # Файл слишком маленький
+                    if self.debug:
+                        print(f"[TTS DEBUG] Файл слишком маленький, игнорируем")
+                    return None
+                return cached_file
+            return None
+                    
+        except Exception as e:
+            if self.debug:
+                print(f"[TTS ERROR] Ошибка при получении пути к кэшу: {e}")
+            return None
+            
+    def _play_cached_file(self, file_path):
+        """
+        Воспроизводит кэшированный файл
+        
+        Args:
+            file_path (str): Путь к файлу
+            
+        Returns:
+            bool: True если воспроизведение успешно, иначе False
+        """
+        try:
+            if not os.path.exists(file_path):
+                return False
+                
+            # Проверяем размер файла (должен быть больше 100 байт)
+            if os.path.getsize(file_path) < 100:
+                return False
+                
+            # Проверяем и подготавливаем файл перед воспроизведением
+            prepared_audio = self._ensure_audio_playable(file_path)
+            if not prepared_audio:
+                return False
+                
+            # Получаем системную громкость
+            volume = 100  # По умолчанию
+            if self.settings_manager:
+                try:
+                    volume = self.settings_manager.get_system_volume()
+                except Exception as vol_error:
+                    if self.debug:
+                        print(f"[TTS WARNING] Ошибка при получении громкости: {vol_error}")
+            
+            # Нормализуем громкость в диапазон 0-1 с экспоненциальной шкалой
+            volume_exp = (volume / 100.0) ** 2
+            
+            if self.debug:
+                print(f"[TTS] Воспроизведение кэшированного файла: {os.path.basename(file_path)} с громкостью {volume}")
+                
+            self.stop_current_sound()
+            
+            # Используем более надежный метод воспроизведения с учетом громкости
+            if prepared_audio.endswith('.wav'):
+                if os.path.exists("/usr/bin/paplay"):
+                    volume_paplay = int(volume_exp * 65536)
+                    cmd = ["paplay", "--volume", str(volume_paplay), prepared_audio]
+                else:
+                    cmd = ["aplay", prepared_audio]
+            else:
+                volume_mpg123 = int(volume_exp * 32768)
+                cmd = ["mpg123", "-q", "--no-control", "-f", str(volume_mpg123), prepared_audio]
+            
+            # Запускаем воспроизведение
+            self.current_sound_process = subprocess.Popen(cmd)
+            self.is_playing = True
+            
+            # Ждем завершения воспроизведения
+            self.current_sound_process.wait()
+            self.is_playing = False
+            self.current_sound_process = None
+            
+            return True
+            
+        except Exception as e:
+            if self.debug:
+                print(f"[TTS ERROR] Ошибка при воспроизведении кэшированного файла: {e}")
             return False
+
+    def _check_internet_connection(self):
+        """
+        Проверяет наличие интернет-соединения, используя несколько надежных серверов
+        
+        Returns:
+            bool: True если есть подключение к интернету, False если нет
+        """
+        # Список надежных серверов для проверки
+        servers = [
+            "8.8.8.8",           # Google DNS
+            "1.1.1.1",           # Cloudflare DNS
+            "208.67.222.222"     # OpenDNS
+        ]
+        
+        import socket
+        
+        for server in servers:
+            try:
+                # Создаем сокет
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(2.0)  # Таймаут 2 секунды
+                
+                # Пробуем подключиться к DNS серверу через порт 53
+                result = sock.connect_ex((server, 53))
+                sock.close()
+                
+                if result == 0:  # Если подключение успешно
+                    if self.debug:
+                        print(f"[TTS] Интернет-соединение доступно (проверено через {server})")
+                    return True
+                    
+            except Exception as e:
+                if self.debug:
+                    print(f"[TTS] Ошибка при проверке соединения через {server}: {e}")
+                continue
+                
+        if self.debug:
+            print("[TTS] Интернет-соединение недоступно")
+        return False
 
     def _get_voice_specific_filename(self, text, voice, check_exists=True):
         """
