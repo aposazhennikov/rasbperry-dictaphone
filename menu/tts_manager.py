@@ -406,14 +406,15 @@ class TTSManager:
             # Создаем хэш от комбинации текста и голоса
             text_hash = hashlib.md5(f"{text}_{voice}".encode('utf-8')).hexdigest()[:8]
             
-            # Формируем имя файла с хэшем
+            # Формируем базовое имя файла с хэшем
             filename = f"gc_{safe_text}_{voice_short}_{text_hash}"
             
             # Определяем расширение файла
             ext = "wav" if use_wav else "mp3"
             
-            # Формируем полный путь к файлу
+            # Формируем пути к обычному и буферизованному файлам
             file_path = os.path.join(self.cache_dir, f"{filename}.{ext}")
+            buffered_file_path = os.path.join(self.cache_dir, f"{filename}_buffered.{ext}")
             
             if self.debug:
                 print(f"[TTS DEBUG] Формирование имени файла:")
@@ -421,12 +422,20 @@ class TTSManager:
                 print(f"[TTS DEBUG] Безопасный текст: '{safe_text}'")
                 print(f"[TTS DEBUG] Хэш текста+голоса: {text_hash}")
                 print(f"[TTS DEBUG] Используемый голос: {voice} -> {voice_short}")
-                print(f"[TTS DEBUG] Полный путь: {file_path}")
-                print(f"[TTS DEBUG] Файл существует: {os.path.exists(file_path)}")
-                if os.path.exists(file_path):
-                    print(f"[TTS DEBUG] Размер файла: {os.path.getsize(file_path)} байт")
+                print(f"[TTS DEBUG] Обычный файл: {file_path}")
+                print(f"[TTS DEBUG] Буферизованный файл: {buffered_file_path}")
+                print(f"[TTS DEBUG] Обычный файл существует: {os.path.exists(file_path)}")
+                print(f"[TTS DEBUG] Буферизованный файл существует: {os.path.exists(buffered_file_path)}")
             
+            # Сначала проверяем наличие буферизованного файла
+            if os.path.exists(buffered_file_path):
+                return buffered_file_path
+            # Затем проверяем обычный файл
+            elif os.path.exists(file_path):
+                return file_path
+            # Если ни один файл не найден, возвращаем путь к обычному файлу
             return file_path
+            
         except Exception as e:
             if self.debug:
                 print(f"[TTS ERROR] Ошибка при получении пути к кэшированному файлу: {e}")
@@ -886,14 +895,27 @@ class TTSManager:
             else:
                 # Предварительная обработка текста
                 processed_text = self._preprocess_text(text)
-                    
-                # Если используем Google Cloud TTS, делегируем ему воспроизведение
-                if self.tts_engine == "google_cloud" and self.google_tts_manager:
-                    return self.google_tts_manager.play_speech(processed_text, voice_id, blocking)
                 
                 # Используем указанный голос или текущий по умолчанию
                 if voice_id is None:
                     voice_id = self.voice
+
+                # Проверяем наличие файла в кэше
+                cached_file = self._get_cache_file(processed_text, voice_id)
+                if cached_file and os.path.exists(cached_file):
+                    if self.debug:
+                        print(f"[TTS] Использую кэшированный файл для: {processed_text}")
+                    return self._play_cached_file(cached_file)
+                    
+                # Если нет кэшированных файлов и нет интернета, используем offline TTS
+                if not self._check_internet_connection():
+                    if self.debug:
+                        print("[TTS] Нет интернета и нет кэшированных файлов, использую offline TTS")
+                    return self.offline_tts.play_speech_blocking(processed_text) if blocking else self.offline_tts.speak(processed_text)
+                    
+                # Если используем Google Cloud TTS, делегируем ему воспроизведение
+                if self.tts_engine == "google_cloud" and self.google_tts_manager:
+                    return self.google_tts_manager.play_speech(processed_text, voice_id, blocking)
                 
                 # Если уже что-то воспроизводится, останавливаем
                 self.stop_current_sound()
@@ -903,7 +925,7 @@ class TTSManager:
                 if not audio_file:
                     if self.debug:
                         print(f"[TTS ERROR] Не удалось сгенерировать аудиофайл для текста: {processed_text}")
-                    return False
+                    return self.offline_tts.play_speech_blocking(processed_text) if blocking else self.offline_tts.speak(processed_text)
             
             # Проверяем и подготавливаем файл перед воспроизведением
             prepared_audio = self._ensure_audio_playable(audio_file)
@@ -1047,10 +1069,6 @@ class TTSManager:
             menu_items (list): Список текстов для озвучки
             voices (list, optional): Список голосов для предварительной генерации
         """
-        # Если используем Google Cloud TTS, делегируем ему
-        if self.tts_engine == "google_cloud" and self.google_tts_manager:
-            return self.google_tts_manager.pre_generate_missing_menu_items(menu_items, voices)
-            
         if not voices:
             voices = [self.voice]  # По умолчанию только текущий голос
             
@@ -1062,10 +1080,18 @@ class TTSManager:
         # Проверяем наличие файлов и составляем список отсутствующих
         for voice in voices:
             for text in unique_items:
-                # Получаем имя файла без проверки существования
-                filename = self._get_voice_specific_filename(text, voice, check_exists=False)
-                if not os.path.exists(filename):
+                # Получаем имена файлов
+                base_filename = self.get_cached_filename(text, use_wav=False, voice=voice)
+                buffered_filename = base_filename.replace('.mp3', '_buffered.mp3').replace('.wav', '_buffered.wav')
+                
+                # Файл считается отсутствующим, если нет ни обычного, ни буферизованного варианта
+                if not os.path.exists(base_filename) and not os.path.exists(buffered_filename):
                     missing_items.append((text, voice))
+                    if self.debug:
+                        print(f"[TTS DEBUG] Отсутствует файл для текста '{text}' с голосом {voice}")
+                        print(f"[TTS DEBUG] Проверены файлы:")
+                        print(f"  - {base_filename}")
+                        print(f"  - {buffered_filename}")
         
         total_missing = len(missing_items)
         processed = 0
@@ -1094,7 +1120,7 @@ class TTSManager:
             
             processed += 1
             if self.debug:
-                print(f"Генерация: {processed}/{total_missing} - {text} (голос: {voice})")
+                print(f"Генерация TTS: {processed}/{total_missing} - {text} (голос: {voice})")
 
     def speak_text(self, text, voice_id=None):
         """

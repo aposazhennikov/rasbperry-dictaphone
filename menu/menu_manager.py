@@ -1386,11 +1386,11 @@ class MenuManager:
                     self.current_menu.current_selection = start_with_file
                     # Запускаем воспроизведение
                     self._play_file(start_with_file)
-                    return True
+                    return
                 
                 # Отображаем меню файлов
                 self.display_current_menu()
-                return True
+                return
             else:
                 print(f"В папке {folder} нет файлов")
                 
@@ -1412,12 +1412,12 @@ class MenuManager:
                 # Возвращаемся в предыдущее меню
                 time.sleep(2)
                 self.display_current_menu()
-                return False
+                return
         except Exception as e:
             error_msg = f"Ошибка при показе меню файлов: {e}"
             print(error_msg)
             sentry_sdk.capture_exception(e)
-            return False
+            return
     
     def _play_file(self, file_index):
         """Начинает воспроизведение выбранного файла"""
@@ -2691,6 +2691,15 @@ class MenuManager:
         speech_texts.add("Папка A")
         speech_texts.add("Папка B")
         speech_texts.add("Папка C")
+        
+        # Добавляем фразы для количества файлов
+        for i in range(1, 101):  # От 1 до 100
+            if i % 10 == 1 and i != 11:
+                speech_texts.add(f"{i} файл")
+            elif i % 10 in [2, 3, 4] and i not in [12, 13, 14]:
+                speech_texts.add(f"{i} файла")
+            else:
+                speech_texts.add(f"{i} файлов")
         
         # Добавляем сообщения для массового удаления записей
         speech_texts.add("Массовое удаление записей")

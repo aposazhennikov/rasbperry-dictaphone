@@ -419,7 +419,7 @@ class GoogleTTSManager:
     
     def get_cached_filename(self, text, use_wav=None, voice=None):
         """
-        Создает имя файла на основе текста и голоса в читаемом формате
+        Возвращает путь к кэшированному файлу для указанного текста и голоса
         
         Args:
             text (str): Текст для озвучки
@@ -429,11 +429,9 @@ class GoogleTTSManager:
         Returns:
             str: Путь к файлу
         """
-        # Если use_wav не указан, используем значение по умолчанию
         if use_wav is None:
             use_wav = self.use_wav
             
-        # Если voice не указан, используем текущий голос
         if voice is None:
             voice = self.voice
             
@@ -448,17 +446,36 @@ class GoogleTTSManager:
         # Добавляем короткое обозначение голоса
         voice_short = voice.split('-')[-1]  # Берем только последнюю часть, например "A" из "ru-RU-Standard-A"
         
-        # Создаем имя файла, но также добавляем хеш для уникальности
+        # Создаем хэш от комбинации текста и голоса
         text_hash = hashlib.md5(f"{text}_{voice}".encode('utf-8')).hexdigest()[:8]
         
-        # Формируем имя файла
+        # Формируем базовое имя файла
         filename = f"gc_{safe_text}_{voice_short}_{text_hash}"
         
-        # Возвращаем имя файла с соответствующим расширением
-        if use_wav:
-            return os.path.join(self.cache_dir, f"{filename}.wav")
-        else:
-            return os.path.join(self.cache_dir, f"{filename}.mp3")
+        # Определяем расширение и формируем пути к обычному и буферизованному файлам
+        ext = "wav" if use_wav else "mp3"
+        file_path = os.path.join(self.cache_dir, f"{filename}.{ext}")
+        buffered_file_path = os.path.join(self.cache_dir, f"{filename}_buffered.{ext}")
+        
+        if self.debug:
+            print(f"[GOOGLE TTS DEBUG] Формирование имени файла:")
+            print(f"[GOOGLE TTS DEBUG] Исходный текст: '{text}'")
+            print(f"[GOOGLE TTS DEBUG] Безопасный текст: '{safe_text}'")
+            print(f"[GOOGLE TTS DEBUG] Хэш текста+голоса: {text_hash}")
+            print(f"[GOOGLE TTS DEBUG] Используемый голос: {voice} -> {voice_short}")
+            print(f"[GOOGLE TTS DEBUG] Обычный файл: {file_path}")
+            print(f"[GOOGLE TTS DEBUG] Буферизованный файл: {buffered_file_path}")
+            print(f"[GOOGLE TTS DEBUG] Обычный файл существует: {os.path.exists(file_path)}")
+            print(f"[GOOGLE TTS DEBUG] Буферизованный файл существует: {os.path.exists(buffered_file_path)}")
+        
+        # Сначала проверяем наличие буферизованного файла
+        if os.path.exists(buffered_file_path):
+            return buffered_file_path
+        # Затем проверяем обычный файл
+        elif os.path.exists(file_path):
+            return file_path
+        # Если ни один файл не найден, возвращаем путь к обычному файлу
+        return file_path
     
     def mp3_to_wav(self, mp3_file):
         """
@@ -1171,10 +1188,18 @@ class GoogleTTSManager:
         # Проверяем наличие файлов и составляем список отсутствующих
         for voice in voices:
             for text in unique_items:
-                # Получаем имя файла без проверки существования
-                filename = self.get_cached_filename(text, use_wav=False, voice=voice)
-                if not os.path.exists(filename):
+                # Получаем имена файлов
+                base_filename = self.get_cached_filename(text, use_wav=False, voice=voice)
+                buffered_filename = base_filename.replace('.mp3', '_buffered.mp3').replace('.wav', '_buffered.wav')
+                
+                # Файл считается отсутствующим, если нет ни обычного, ни буферизованного варианта
+                if not os.path.exists(base_filename) and not os.path.exists(buffered_filename):
                     missing_items.append((text, voice))
+                    if self.debug:
+                        print(f"[GOOGLE TTS DEBUG] Отсутствует файл для текста '{text}' с голосом {voice}")
+                        print(f"[GOOGLE TTS DEBUG] Проверены файлы:")
+                        print(f"  - {base_filename}")
+                        print(f"  - {buffered_filename}")
         
         total_missing = len(missing_items)
         processed = 0
