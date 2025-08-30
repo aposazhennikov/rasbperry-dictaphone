@@ -1,298 +1,362 @@
-# Иерархическое меню с озвучкой для незрячих пользователей
+# 🎙️ Raspberry Pi Dictaphone Go
 
-Проект представляет собой иерархическое меню с навигацией с помощью клавиш (пульта) и озвучкой всех пунктов меню.
+A voice-controlled dictaphone application for visually impaired users, running on Raspberry Pi with Ubuntu. This is a complete rewrite of the original Python version in Go, providing better performance, reliability, and easier deployment.
 
-## Требования
+## ✨ Features
 
-Для работы проекта необходимы следующие зависимости:
+- **🗣️ Voice Navigation**: Complete TTS (Text-to-Speech) interface with Russian voice support
+- **🎙️ Audio Recording**: High-quality audio recording with pause/resume functionality  
+- **▶️ Audio Playback**: Full playback control with speed adjustment, seeking, and volume control
+- **🎛️ Remote Control**: Support for HAOBO Technology USB remote control
+- **💾 USB Management**: Automatic USB storage device detection and mounting
+- **📻 Radio Stations**: Support for radio stations and podcasts
+- **⚙️ Settings Management**: Voice-controlled settings configuration
+- **🖥️ Visual Interface**: Optional text-based visual interface
+- **🔧 System Integration**: Systemd services for automatic startup
 
-```
-evdev>=1.6.0  # для работы с пультом
-gTTS>=2.3.1   # для озвучки текста (бесплатный синтез)
-google-cloud-texttospeech>=2.14.1  # для работы с Google Cloud TTS (более качественный)
-google-cloud-monitoring>=2.14.1  # для получения статистики использования API
-python-vlc>=3.0.20000  # для воспроизведения аудио
-python-magic>=0.4.27  # для определения типов файлов
-```
+## 🏗️ Architecture
 
-Кроме того, проект использует следующие стандартные библиотеки Python:
-- os, sys - для работы с файловой системой
-- threading, subprocess - для многопоточности и запуска внешних процессов
-- hashlib, json - для хеширования и работы с JSON
-- datetime - для работы с датами
-- glob - для поиска файлов по шаблону
-- argparse - для обработки аргументов командной строки
+### Core Components
 
-Под Windows для воспроизведения звуков используется PowerShell и System.Media.SoundPlayer.
-Под Linux для воспроизведения MP3-файлов требуется `mpg123` и `vlc`.
+- **Audio System**: Recording and playback using `malgo` library with system utilities fallback
+- **TTS System**: Google Cloud TTS with gTTS fallback and intelligent caching
+- **Input Handler**: Linux input events processing for remote control
+- **USB Monitor**: Automatic USB device detection using `go-udev`
+- **Menu System**: Hierarchical menu navigation with TTS integration
+- **Visual Interface**: Optional terminal-based UI
 
-## Установка
+### Technology Stack
 
-1. Клонируйте репозиторий:
-```
-git clone <repository-url>
-cd <repository-directory>
-```
+- **Language**: Go 1.21+
+- **Audio**: `github.com/gen2brain/malgo` + system utilities (aplay, mpg123, vlc)
+- **TTS**: Google Cloud TTS SDK + gTTS fallback
+- **USB**: `github.com/jochenvg/go-udev` + udisks2
+- **Input**: Direct Linux input events processing
+- **Logging**: Sentry integration + structured logging
 
-2. Установите зависимости:
-```
-pip install -r requirements.txt
-```
+## 📋 Requirements
 
-3. Для Linux установите необходимые пакеты:
-```
-sudo apt-get install mpg123 vlc libmagic1 udisks2  # Debian/Ubuntu
-```
+### Hardware
+- Raspberry Pi 4 (recommended) or Raspberry Pi 3B+
+- USB Audio device or built-in audio
+- HAOBO Technology USB remote control
+- USB storage devices (optional)
 
-## Использование
+### Software
+- Ubuntu 20.04+ on Raspberry Pi
+- Go 1.21+ (for building from source)
+- System packages (installed automatically):
+  - `alsa-utils`, `pulseaudio`
+  - `mpg123`, `sox`, `vlc-bin`, `ffmpeg`
+  - `udisks2`, `libudev-dev`
 
-### Запуск меню
+## 🚀 Quick Start
 
-```
-python run_menu.py
-```
+### Option 1: Binary Installation (Recommended)
 
-### Опции командной строки
+1. Download the latest release for your architecture:
+```bash
+# For Raspberry Pi 4 (ARM64)
+wget https://github.com/username/raspberry-dictaphone-go/releases/latest/download/raspberry-dictaphone-go-linux-arm64.tar.gz
 
-```
-python run_menu.py --help
-```
-
-Доступные опции:
-- `--no-tts` - отключить озвучку
-- `--cache-dir DIR` - указать директорию для кэширования звуков (по умолчанию "/home/aleks/cache_tts")
-- `--pre-generate` - предварительно сгенерировать все звуки и выйти
-- `--debug` - включить режим отладки с выводом диагностической информации
-- `--use-mp3` - использовать MP3 вместо WAV (WAV обычно воспроизводится быстрее)
-- `--voice VOICE_ID` - выбрать голос для озвучки (например: ru-RU-Standard-A)
-- `--tts-engine {gtts,google_cloud}` - движок для синтеза речи (`gtts` или `google_cloud`)
-- `--google-cloud-credentials FILE` - путь к файлу с учетными данными Google Cloud
-- `--show-metrics` - показать подробную информацию об использовании Google Cloud API
-
-### Предварительная генерация звуков
-
-Чтобы предварительно сгенерировать все звуки для меню (рекомендуется):
-
-```
-python run_menu.py --pre-generate
+# For Raspberry Pi 3 (ARM32)
+wget https://github.com/username/raspberry-dictaphone-go/releases/latest/download/raspberry-dictaphone-go-linux-arm.tar.gz
 ```
 
-Для генерации озвучки с конкретным голосом:
-
-```
-python run_menu.py --pre-generate --voice ru-RU-Standard-B
-```
-
-Для генерации озвучки с использованием Google Cloud TTS:
-
-```
-python run_menu.py --pre-generate --tts-engine google_cloud --google-cloud-credentials credentials-google-api.json --debug
+2. Extract and install:
+```bash
+tar -xzf raspberry-dictaphone-go-*.tar.gz
+cd raspberry-dictaphone-go
+sudo ./scripts/install.sh
 ```
 
-Это создаст все необходимые файлы озвучки в директории `cache_tts`.
+3. Configure Google Cloud TTS credentials:
+```bash
+sudo cp your-credentials.json /opt/dictaphone/credentials-google-api.json
+sudo chown aleks:aleks /opt/dictaphone/credentials-google-api.json
+```
 
-## Навигация по меню
+4. Start the services:
+```bash
+sudo systemctl start usb-monitor
+sudo systemctl start dictaphone
+```
 
-- `KEY_UP` - перемещение вверх по меню
-- `KEY_DOWN` - перемещение вниз по меню
-- `KEY_SELECT` - выбор текущего пункта меню
-- `KEY_BACK` - возврат в родительское меню
+### Option 2: Build from Source
 
-## Работа с внешними носителями
+1. Clone the repository:
+```bash
+git clone https://github.com/username/raspberry-dictaphone-go.git
+cd raspberry-dictaphone-go
+```
 
-В меню доступен пункт "Внешний носитель", который позволяет:
-- Просматривать подключенные USB-накопители
-- Отображать название и размер каждого накопителя
-- Просматривать содержимое USB-накопителей
-- Копировать файлы на USB-накопители (в разработке)
+2. Build and install:
+```bash
+make build-rpi4  # or make build-rpi3 for older Pi
+sudo make install
+```
 
-При отсутствии подключенных USB-накопителей выводится соответствующее сообщение.
+### Option 3: Docker (Experimental)
 
-### Автоматическое монтирование
+1. Build and run with Docker Compose:
+```bash
+docker-compose up -d
+```
 
-Система автоматически монтирует USB-накопители при их подключении, используя `udisks2`. Поддерживаются различные файловые системы:
-- FAT32
-- NTFS
-- exFAT
-- ext2/3/4
-- и другие
+## ⚙️ Configuration
 
-### Безопасное извлечение
+The main configuration file is located at `/opt/dictaphone/config.yaml`:
 
-Перед физическим отключением USB-накопителя рекомендуется выйти из меню внешнего носителя для корректного размонтирования.
+```yaml
+app:
+  name: "Raspberry Pi Dictaphone"
+  version: "2.0.0"
+  debug: false
 
-## Доступные голоса
+audio:
+  sample_rate: 44100
+  channels: 1
+  max_duration: "3h"
+  min_free_space: "1GB"
+  records_dir: "/home/aleks/records"
+  
+tts:
+  primary_engine: "google_cloud"
+  fallback_engine: "gtts"
+  cache_dir: "/home/aleks/cache_tts"
+  voice: "ru-RU-Standard-A"
+  credentials_path: "/opt/dictaphone/credentials-google-api.json"
+  
+input:
+  device_name: "HAOBO Technology USB Composite Device Keyboard"
+  
+usb:
+  monitor_enabled: true
+  auto_mount: true
+  
+logging:
+  level: "info"
+  sentry_dsn: "your-sentry-dsn"
+  sentry_enabled: true
 
-В системе доступны следующие голоса для озвучки:
-- `ru-RU-Standard-A` - Женский голос 1 (по умолчанию)
-- `ru-RU-Standard-B` - Мужской голос 1
-- `ru-RU-Standard-C` - Женский голос 2
-- `ru-RU-Standard-D` - Мужской голос 2
-- `ru-RU-Standard-E` - Женский голос 3
+visual_interface:
+  enabled: true
+  width: 80
+  height: 24
+  refresh_rate: "100ms"
+```
 
-Выбор голоса доступен через меню: "Настройки" -> "Выбор голоса".
-Выбранный голос сохраняется между запусками программы.
+## 🎛️ Remote Control
 
-## Кастомизация
+The application supports the HAOBO Technology USB remote control with the following key mappings:
 
-### Добавление новых пунктов меню
+| Key | Function |
+|-----|----------|
+| ↑↓ | Menu navigation |
+| ⏎ (SELECT) | Select menu item / Pause recording |
+| ← (BACK) | Go back / Stop |
+| ←→ | Seek backward/forward (10s) |
+| Page Up/Down | Volume control |
+| Volume Up/Down | Playback speed control |
+| Power | Delete file |
 
-Структура меню задается в методе `create_menu_structure()` класса `MenuManager`. Для добавления новых пунктов измените соответствующий код в файле `menu/menu_manager.py`.
+## 📁 Directory Structure
 
-### Настройка озвучки
+```
+/opt/dictaphone/          # Application directory
+├── bin/                  # Binaries
+│   ├── dictaphone       # Main application
+│   └── usb-monitor      # USB monitoring service
+├── config.yaml          # Configuration file
+├── credentials-google-api.json  # Google Cloud credentials
+└── scripts/             # Installation scripts
 
-Для настройки параметров озвучки измените параметры в конструкторе класса `TTSManager` в файле `menu/tts_manager.py`.
+/home/aleks/             # User directory
+├── records/             # Audio recordings
+│   ├── Заметки/        # Notes folder
+│   ├── Идеи/           # Ideas folder
+│   ├── Важное/         # Important folder
+│   ├── Работа/         # Work folder
+│   └── Личное/         # Personal folder
+└── cache_tts/          # TTS cache
+```
 
-### Добавление новых голосов
+## 🛠️ Development
 
-Для добавления новых голосов измените метод `get_available_voices()` в классе `SettingsManager` в файле `menu/settings_manager.py`.
-
-# Raspberry Pi Dictaphone
-
-Проект диктофона на Raspberry Pi с текстовой и голосовой навигацией по меню.
-
-## Новые возможности
-
-- Синтез речи с использованием Google Cloud Text-to-Speech API с поддержкой различных голосов
-- Поддержка двух движков синтеза речи: gTTS (бесплатно) и Google Cloud TTS (более качественный, требует аккаунта)
-- Возможность выбора голоса для озвучки меню
-- Кэширование аудиофайлов, созданных Google Cloud TTS API (экономия на повторных запросах)
-- Мониторинг использования Google Cloud API и отображение метрик в режиме отладки
-- Надёжная система записи звука с использованием библиотеки SoundDevice
-- Поддержка паузы и возобновления записи без потери данных
-- Организация записей в различных папках (A, B, C)
-- Голосовые уведомления о статусе записи
-- Воспроизведение записей с поддержкой WAV и MP3 форматов
-- Управление воспроизведением (пауза, перемотка, регулировка громкости)
-- Удаление записей с подтверждением
-- Переключение между записями в папке
-- Проверка свободного места на диске перед записью с предупреждением при недостатке
-- Автоматическое ограничение длительности записи (3 часа) для предотвращения ошибок
-- Интеграция с Sentry для отслеживания ошибок в реальном времени
-
-## Функции диктофона
-
-### Запись аудио
-- **Запись звука**: Запись аудио с микрофона устройства в выбранную папку
-- **Пауза/возобновление**: Возможность приостановить и продолжить запись
-- **Организация записей**: Хранение записей в папках A, B и C
-- **Автоматическое именование**: Создание файлов с именами на основе даты и времени
-- **Голосовое управление**: Голосовые подтверждения всех действий с диктофоном
-- **Индикация времени**: Отображение текущего времени записи с учетом пауз
-- **Контроль свободного места**: Предупреждение, если на диске осталось менее 1 ГБ
-- **Ограничение длительности**: Автоматическое завершение записи после 3 часов для безопасности
-
-### Воспроизведение аудио
-- **Выбор папки**: Возможность выбрать папку (A, B, C) для воспроизведения
-- **Список записей**: Отображение списка записей, отсортированных по дате (от новых к старым)
-- **Управление воспроизведением**: Пауза, перемотка, регулировка громкости
-- **Переключение между записями**: Возможность переключаться между записями в папке
-- **Удаление записей**: Удаление записей с подтверждением
-- **Ускоренное воспроизведение**: Воспроизведение в 2x скорости при удержании клавиши
-
-## Безопасность и надежность
-
-### Контроль свободного места
-Система автоматически проверяет доступное место на диске перед началом записи. Если свободного места менее 1 ГБ, воспроизводится голосовое предупреждение:
-
-> Внимание, на устройстве осталось менее 1GB памяти, рекомендуется освободить память устройства
-
-### Ограничение длительности записи
-Для предотвращения ошибок из-за слишком длинных записей, система автоматически останавливает запись после 3 часов непрерывной работы. При этом воспроизводится системное сообщение:
-
-> Порог записи длительность 3 часа достигнут завершаю и сохраняю запись во избежание ошибок
-
-### Отслеживание ошибок
-Система интегрирована с Sentry для мониторинга ошибок в режиме реального времени. Это помогает быстро выявлять и исправлять проблемы, с которыми могут столкнуться пользователи.
-
-### Обработка ошибок ввода-вывода
-Все операции с файловой системой и аудиоустройствами защищены обработчиками исключений, что повышает стабильность системы и предотвращает аварийное завершение программы.
-
-## Управление диктофоном
-
-### Режим записи
-- `KEY_SELECT` - Пауза/возобновление записи
-- `KEY_BACK` - Остановка и сохранение записи
-
-### Режим воспроизведения
-- `KEY_SELECT` - Пауза/возобновление воспроизведения
-- `KEY_BACK` - Остановка воспроизведения и возврат в меню
-- `KEY_LEFT` (удержание) - Перемотка назад
-- `KEY_RIGHT` (удержание) - Ускоренное воспроизведение (2x скорость)
-- `KEY_PAGEUP` - Уменьшение громкости
-- `KEY_PAGEDOWN` - Увеличение громкости
-- `KEY_POWER` - Удаление текущей записи (с подтверждением)
-- `KEY_VOLUMEUP` - Переключение на следующую композицию 
-- `KEY_VOLUMEDOWN` - Переключение на предыдущую композицию 
-## Зависимости
-
-Для работы диктофона требуются следующие библиотеки:
-- sounddevice - для записи звука
-- soundfile - для сохранения записанного звука
-- numpy - для обработки аудиоданных
-- pydub - для работы с аудиофайлами разных форматов
-- mpg123 - для воспроизведения MP3 файлов (устанавливается отдельно)
-
-## Технические особенности
-
-### Запись звука
-Запись звука производится с помощью библиотеки SoundDevice, которая обеспечивает более надежную работу с аудиоустройствами по сравнению с PyAudio. Данные записи накапливаются в оперативной памяти и сохраняются в файл после остановки записи. Это позволяет избежать потери данных при паузе/возобновлении записи.
-
-### Воспроизведение звука
-Воспроизведение аудиофайлов осуществляется с помощью системных утилит aplay (для WAV) и mpg123 (для MP3). Это обеспечивает надежное воспроизведение на различных устройствах, включая Raspberry Pi. Поддерживается управление громкостью, скоростью воспроизведения и перемотка.
-
-Для голосовых уведомлений используется Google Cloud TTS или gTTS, а для звуковых сигналов - встроенная утилита aplay.
-
-## Запуск
-
-### Установка зависимостей
+### Building
 
 ```bash
-pip install -r requirements.txt
+# Install dependencies
+make deps
+
+# Build for current platform
+make build
+
+# Build for specific platforms
+make build-rpi4    # Raspberry Pi 4 (ARM64)
+make build-rpi3    # Raspberry Pi 3 (ARM32)
+make build-amd64   # x86_64 for testing
+
+# Create distribution package
+make dist
+
+# Format code and run linter
+make fmt
+make lint
+
+# Run tests
+make test
 ```
 
-### Запуск с gTTS (по умолчанию)
+### Development Environment
 
 ```bash
-python run_menu.py
+# Set up development environment
+make dev-setup
+
+# Run locally for testing
+make run-dictaphone
+make run-usb-monitor
+
+# Pre-generate TTS cache
+make pregenerate
 ```
 
-### Запуск с Google Cloud TTS
+## 🔧 System Integration
+
+### Systemd Services
+
+The application runs as two systemd services:
+
+1. **dictaphone.service**: Main application
+2. **usb-monitor.service**: USB device monitoring
 
 ```bash
-python run_menu.py --tts-engine google_cloud --google-cloud-credentials credentials-google-api.json --debug
+# Check status
+sudo systemctl status dictaphone
+sudo systemctl status usb-monitor
+
+# View logs
+sudo journalctl -u dictaphone -f
+sudo journalctl -u usb-monitor -f
+
+# Control services
+sudo systemctl start/stop/restart dictaphone
+sudo systemctl enable/disable dictaphone
 ```
 
-### Параметры запуска
+### Permissions
 
-- `--no-tts` - запуск без озвучки
-- `--debug` - режим отладки с выводом диагностики
-- `--cache-dir DIR` - указание директории для кэширования (по умолчанию `/home/aleks/cache_tts`)
-- `--use-mp3` - использовать MP3 вместо WAV для воспроизведения
-- `--voice VOICE_ID` - идентификатор голоса для озвучки (например, `ru-RU-Standard-A`)
-- `--tts-engine {gtts,google_cloud}` - движок для синтеза речи (`gtts` или `google_cloud`)
-- `--google-cloud-credentials FILE` - путь к файлу с учетными данными Google Cloud
-- `--show-metrics` - показать подробную статистику использования Google Cloud API
+The application requires specific permissions for:
+- Audio devices (ALSA/PulseAudio)
+- Input devices (evdev)
+- USB mounting (udisks2 via PolicyKit)
+- System volume control
 
-## Настройка Google Cloud TTS
+These are configured automatically during installation.
 
-1. Создайте проект в Google Cloud и активируйте API для Text-to-Speech
-2. Создайте сервисный аккаунт и скачайте ключ в формате JSON
-3. Сохраните ключ как `credentials-google-api.json` в корне проекта
-4. Файл с ключом автоматически добавлен в `.gitignore` для безопасности
+## 🚨 Troubleshooting
 
-## Доступные голоса
+### Common Issues
 
-- `ru-RU-Standard-A` - Женский голос 1
-- `ru-RU-Standard-B` - Мужской голос 1
-- `ru-RU-Standard-C` - Женский голос 2
-- `ru-RU-Standard-D` - Мужской голос 2
-- `ru-RU-Standard-E` - Женский голос 3
+1. **No audio devices found**
+   ```bash
+   # Check ALSA devices
+   aplay -l
+   arecord -l
+   
+   # Check PulseAudio
+   sudo -u aleks pulseaudio --check -v
+   ```
 
-При использовании Google Cloud TTS вы получите доступ к дополнительным голосам, качество которых значительно выше, чем у gTTS.
+2. **Remote control not working**
+   ```bash
+   # Check input devices
+   ls -la /dev/input/
+   cat /proc/bus/input/devices | grep -A 5 "HAOBO"
+   
+   # Test input events
+   sudo evtest
+   ```
 
-## Кэширование и экономия ресурсов
+3. **USB devices not mounting**
+   ```bash
+   # Check udisks2
+   udisksctl status
+   
+   # Check PolicyKit rules
+   pkaction --action-id org.freedesktop.udisks2.filesystem-mount
+   ```
 
-Система автоматически кэширует все аудиофайлы, созданные с помощью Google Cloud TTS API. При повторных запросах используются файлы из кэша, что не требует дополнительных расходов. Кэшированные файлы имеют префикс `gc_` и хранятся в директории, указанной в параметре `--cache-dir`.
+4. **TTS not working**
+   ```bash
+   # Check Google Cloud credentials
+   ls -la /opt/dictaphone/credentials-google-api.json
+   
+   # Test TTS manually
+   sudo -u aleks /opt/dictaphone/bin/dictaphone pregenerate
+   ```
 
-Google Cloud TTS API предоставляет 1 миллион бесплатных символов в месяц, после чего начинается тарификация. В режиме отладки система показывает текущее использование API и оставшееся количество бесплатных символов.
+### Logs
+
+- Application logs: `sudo journalctl -u dictaphone -f`
+- USB monitor logs: `sudo journalctl -u usb-monitor -f`
+- System logs: `sudo journalctl -f`
+
+## 📊 Performance
+
+### Resource Usage
+
+- **Memory**: ~50-100MB (main app), ~20MB (USB monitor)
+- **CPU**: <5% during normal operation, ~20% during TTS generation
+- **Storage**: ~500MB for application, variable for recordings and TTS cache
+
+### Optimization
+
+- TTS responses are cached to minimize API calls and improve performance
+- Audio processing uses efficient native libraries
+- USB monitoring is event-driven to minimize CPU usage
+
+## 🔒 Security
+
+- Services run with minimal privileges
+- Input validation for all user data
+- Secure credential storage
+- Optional Sentry integration for error monitoring
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+### Development Guidelines
+
+- Follow Go best practices
+- Add tests for new functionality
+- Update documentation
+- Use conventional commit messages
+- Ensure code passes linting
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- Original Python version developers
+- Go community for excellent libraries
+- Google Cloud for TTS services
+- Raspberry Pi Foundation
+
+## 📞 Support
+
+- Create an issue on GitHub for bugs or feature requests
+- Check existing issues before creating new ones
+- Provide detailed information including logs and system configuration
+
+---
+
+**Made with ❤️ for the visually impaired community**

@@ -1,0 +1,43 @@
+# Git
+.git
+.gitignore
+
+# Build artifacts
+build/
+dist/
+*.tar.gz
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+
+# Documentation
+README.md
+docs/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Local development
+.env
+.env.local
+
+# Credentials (should be mounted as volumes)
+credentials-*.json
+*.pem
+*.key

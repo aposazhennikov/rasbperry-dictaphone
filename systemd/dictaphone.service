@@ -1,0 +1,50 @@
+[Unit]
+Description=Raspberry Pi Dictaphone Service
+Documentation=https://github.com/username/raspberry-dictaphone-go
+After=network.target sound.target usb-monitor.service
+Wants=usb-monitor.service
+
+[Service]
+Type=simple
+User=aleks
+Group=audio
+Restart=always
+RestartSec=5
+StartLimitInterval=60s
+StartLimitBurst=3
+
+# Environment variables
+Environment=HOME=/home/aleks
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=PULSE_RUNTIME_PATH=/run/user/1000/pulse
+Environment=DICTAPHONE_CONFIG_PATH=/opt/dictaphone/config.yaml
+Environment=DICTAPHONE_LOG_LEVEL=info
+
+# Working directory
+WorkingDirectory=/opt/dictaphone
+
+# Main executable
+ExecStart=/opt/dictaphone/bin/dictaphone --config /opt/dictaphone/config.yaml
+
+# Graceful shutdown
+ExecStop=/bin/kill -TERM $MAINPID
+TimeoutStopSec=30
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/dictaphone /home/aleks/records /home/aleks/cache_tts /tmp
+
+# Resource limits
+MemoryMax=512M
+CPUQuota=50%
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dictaphone
+
+[Install]
+WantedBy=multi-user.target

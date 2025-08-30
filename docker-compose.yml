@@ -1,0 +1,184 @@
+version: '3.8'
+
+services:
+  # Main dictaphone application
+  dictaphone:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dictaphone
+    hostname: dictaphone
+    restart: unless-stopped
+    
+    # Privileged mode for hardware access
+    privileged: true
+    
+    # Network mode host for better hardware integration
+    network_mode: host
+    
+    # Volume mounts
+    volumes:
+      # Configuration
+      - ./configs/config.yaml:/opt/dictaphone/config.yaml:ro
+      - ./credentials-google-api.json:/opt/dictaphone/credentials-google-api.json:ro
+      
+      # Data directories
+      - dictaphone_records:/home/aleks/records
+      - dictaphone_cache:/home/aleks/cache_tts
+      - dictaphone_logs:/opt/dictaphone/logs
+      
+      # System devices and hardware access
+      - /dev:/dev
+      - /sys:/sys:ro
+      - /proc:/proc:ro
+      - /run/udev:/run/udev:ro
+      - /var/run/dbus:/var/run/dbus:ro
+      
+      # Audio system
+      - /etc/asound.conf:/etc/asound.conf:ro
+      - /usr/share/alsa:/usr/share/alsa:ro
+      
+      # PulseAudio (if using)
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
+      - /run/user/1000/pulse:/run/user/1000/pulse:ro
+      
+      # USB mount points
+      - /media:/media
+      - /mnt:/mnt
+    
+    # Environment variables
+    environment:
+      - HOME=/home/aleks
+      - XDG_RUNTIME_DIR=/tmp/runtime-aleks
+      - PULSE_RUNTIME_PATH=/tmp/runtime-aleks/pulse
+      - DICTAPHONE_CONFIG_PATH=/opt/dictaphone/config.yaml
+      - DICTAPHONE_LOG_LEVEL=info
+      - DICTAPHONE_SENTRY_ENABLED=true
+      - TZ=Europe/Moscow
+    
+    # Device access
+    devices:
+      # Audio devices
+      - /dev/snd:/dev/snd
+      
+      # Input devices
+      - /dev/input:/dev/input
+      
+      # USB devices (will be added dynamically)
+      # - /dev/sda1:/dev/sda1
+      # - /dev/sdb1:/dev/sdb1
+    
+    # Capabilities
+    cap_add:
+      - SYS_ADMIN
+      - DAC_OVERRIDE
+      - SETUID
+      - SETGID
+    
+    # Security options
+    security_opt:
+      - apparmor:unconfined
+    
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "/opt/dictaphone/healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    # Dependencies
+    depends_on:
+      - usb-monitor
+
+  # USB monitoring service
+  usb-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile.usb-monitor
+    container_name: usb-monitor
+    hostname: usb-monitor
+    restart: unless-stopped
+    
+    # Privileged mode for USB management
+    privileged: true
+    
+    # Network mode host
+    network_mode: host
+    
+    # Volume mounts
+    volumes:
+      # Configuration
+      - ./configs/config.yaml:/opt/dictaphone/config.yaml:ro
+      
+      # System access for USB management
+      - /dev:/dev
+      - /sys:/sys:ro
+      - /proc:/proc:ro
+      - /run/udev:/run/udev:ro
+      - /var/run/dbus:/var/run/dbus:ro
+      
+      # USB mount points
+      - /media:/media
+      - /mnt:/mnt
+      
+      # Logs
+      - dictaphone_logs:/opt/dictaphone/logs
+    
+    # Environment variables
+    environment:
+      - DICTAPHONE_CONFIG_PATH=/opt/dictaphone/config.yaml
+      - DICTAPHONE_LOG_LEVEL=info
+      - TZ=Europe/Moscow
+    
+    # Capabilities
+    cap_add:
+      - SYS_ADMIN
+      - DAC_OVERRIDE
+    
+    # Security options
+    security_opt:
+      - apparmor:unconfined
+    
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+# Named volumes
+volumes:
+  dictaphone_records:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /home/aleks/records
+  
+  dictaphone_cache:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /home/aleks/cache_tts
+  
+  dictaphone_logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/dictaphone/logs
+
+# Networks (using host network for hardware access)
+networks:
+  default:
+    external: true
+    name: host

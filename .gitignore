@@ -1,47 +1,79 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
 *.so
-.Python
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+
+# Build artifacts
 build/
-develop-eggs/
 dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+*.tar.gz
+*.zip
 
-# Секретные данные
-google_cloud_key.json
-*_key.json
-*.key
-secrets/
-
-# Кэш и временные файлы
-*/cache_tts/
-*.mp3
-*.wav
-tts_stats.json
-settings.json
-
-# Среды и IDE
-.env
-.venv
-venv/
-ENV/
-.idea/
+# IDE
 .vscode/
+.idea/
 *.swp
 *.swo
+*~
 
-# Логи
-*.log 
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+
+# Environment variables
+.env
+.env.local
+.env.development
+.env.production
+
+# Credentials and secrets
+credentials-*.json
+*.pem
+*.key
+*.p12
+
+# TTS cache (for development)
+cache_tts/
+
+# Audio recordings (for development)
+records/
+
+# Config overrides for local development
+config.local.yaml
+config.dev.yaml
+
+# Sentry
+.sentryclirc
+
+# Testing
+coverage.txt
+coverage.html
+
+# Documentation build artifacts
+docs/_build/
+
+# Local scripts
+local/
+scripts/local/

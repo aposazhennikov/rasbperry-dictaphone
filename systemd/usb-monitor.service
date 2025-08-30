@@ -1,0 +1,46 @@
+[Unit]
+Description=USB Device Monitor Service
+Documentation=https://github.com/username/raspberry-dictaphone-go
+After=network.target
+Before=dictaphone.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+Restart=always
+RestartSec=5
+StartLimitInterval=60s
+StartLimitBurst=3
+
+# Environment variables
+Environment=DICTAPHONE_CONFIG_PATH=/opt/dictaphone/config.yaml
+Environment=DICTAPHONE_LOG_LEVEL=info
+
+# Working directory
+WorkingDirectory=/opt/dictaphone
+
+# Main executable
+ExecStart=/opt/dictaphone/bin/usb-monitor --config /opt/dictaphone/config.yaml
+
+# Graceful shutdown
+ExecStop=/bin/kill -TERM $MAINPID
+TimeoutStopSec=15
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/dictaphone /media /mnt /run/udev
+
+# Resource limits
+MemoryMax=128M
+CPUQuota=25%
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=usb-monitor
+
+[Install]
+WantedBy=multi-user.target
